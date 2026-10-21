@@ -14,7 +14,8 @@ from .db import kv_get, kv_set, log, utcnow
 from .paper import UA, YAHOO, paper_spec
 
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
-TIMEFRAMES = (5, 15, 60)
+TIMEFRAMES = (60,)               # only hourly candles go back far enough (about 24 months); Yahoo gives just 60 days of 5m/15m/30m
+MIN_DAYS = 180                   # a backtest must cover at least 6 months or it cannot be called proven
 STOPS = (1.0, 1.5, 2.0)          # stop distance in ATRs
 RRS = (1.2, 1.5, 2.0)            # target as a multiple of the stop
 SESSIONS = ("all", "london_ny")
@@ -23,6 +24,7 @@ MIN_TRAIN, MIN_TEST = 25, 12
 # what a setup must show on the unseen 40% before live trading may use it
 OK_TEST_EXPECTANCY, OK_TEST_PF = 0.05, 1.15
 MIN_TEST_STRONG = 30            # a setup judged on fewer unseen trades than this is too thin to trust
+MIN_T = 1.0                     # and the average win must be at least one standard error above zero, else it is indistinguishable from luck
 MIN_ROBUST = 0.4                # and at least this share of ALL tested settings must also be positive on the unseen part: an edge that exists only for one lucky setting is noise
 
 
@@ -90,15 +92,20 @@ def simulate(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread:
 def stats(r: np.ndarray) -> dict:
     n = len(r)
     if n == 0:
-        return {"n": 0, "win": 0.0, "exp": 0.0, "pf": 0.0, "net": 0.0}
+        return {"n": 0, "win": 0.0, "exp": 0.0, "pf": 0.0, "net": 0.0, "t": 0.0}
     w, lo = r[r > 0].sum(), -r[r < 0].sum()
-    return {"n": n, "win": round(float((r > 0).mean() * 100), 1), "exp": round(float(r.mean()), 3), "pf": round(float(w / lo) if lo > 0 else 9.99, 2), "net": round(float(r.sum()), 2)}
+    sd = float(r.std(ddof=1)) if n > 1 else 0.0
+    t = float(r.mean() / (sd / n ** 0.5)) if sd > 0 else 0.0     # how many standard errors the average result sits above zero: small means it could be luck
+    return {"t": round(t, 2), "n": n, "win": round(float((r > 0).mean() * 100), 1), "exp": round(float(r.mean()), 3), "pf": round(float(w / lo) if lo > 0 else 9.99, 2), "net": round(float(r.sum()), 2)}
 
 
 def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     """Every strategy and setting on this symbol and candle size: pick the best on the first 60%, judge it on the last 40%."""
     df = fetch_history(symbol, tf) if df is None else df
     spread = float(paper_spec(symbol)["spread"])
+    days = (float(df["time"].iloc[-1]) - float(df["time"].iloc[0])) / 86400
+    if days < MIN_DAYS:
+        raise RuntimeError(f"{symbol} {tf}m history covers only {days:.0f} days, {MIN_DAYS} needed")
     cut = int(len(df) * 0.6)
     results, base = [], None
     for name in S.STRATEGIES:
@@ -113,11 +120,11 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     bl = [x for x in results if x["strategy"] == S.BASELINE and x["stop_k"] == 1.5 and x["rr"] == 1.5 and x["session"] == "all"]
     base = bl[0]["test"] if bl else None
     tested = [x for x in results if x["test"]["n"] >= MIN_TEST]
-    row = {"symbol": symbol, "tf": tf, "candles": len(df), "baseline_test": base, "best": best,
+    row = {"symbol": symbol, "tf": tf, "candles": len(df), "days": round(days), "baseline_test": base, "best": best,
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
         t = best["test"]
-        row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and row["share_positive_test"] >= MIN_ROBUST
+        row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and t.get("t", 0) >= MIN_T and row["share_positive_test"] >= MIN_ROBUST
     return row
 
 

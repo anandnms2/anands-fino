@@ -281,3 +281,7 @@ svg text { font-family: var(--font-mono); }
 .tk-chk { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--warn) !important; }
 .tk-f { display: flex; justify-content: space-between; gap: 10px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
 .tk-g input, .tk-b select { min-width: 0; width: 100%; box-sizing: border-box; }
+.sb{font-style:normal;font-size:9px;font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:3px;margin-left:6px;white-space:nowrap;text-transform:uppercase;border:1px solid var(--line,#444);color:var(--mute,#999)}
+.sb.ok{color:#2fbf71;border-color:#2fbf71}.sb.un{color:#f5a623;border-color:#f5a623}.sb.test{color:#5aa9ff;border-color:#5aa9ff}.sb.off{opacity:.7}
+.wl-r > span:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:0 4px}
+.wl .sb{flex-basis:auto;margin:2px 0 0;font-size:8px;max-width:150px;overflow:hidden;text-overflow:ellipsis}

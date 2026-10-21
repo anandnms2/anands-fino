@@ -249,27 +249,32 @@ def test_strategy_mode_trades_only_proven_setups_and_respects_loss_cooldown(monk
 
     kv_set("strategy_mode", True)
     force_buy(monkeypatch); yes(monkeypatch)
-    # nothing proven yet: no symbol may trade, whatever the score says
+    # nothing proven yet: symbols still trade on the score rules, marked unproven
     engine.run_cycle(force=True)
-    assert brk.get_broker("demo").orders == []
+    assert brk.get_broker("demo").orders
     with session() as s:
         sigs = s.scalars(select(Signal)).all()
-        assert sigs and all(x.status == "no_trade" and "proven" in x.reason for x in sigs)
+        assert sigs and all((x.context or {}).get("strategy") == "unproven" for x in sigs)
+    brk.get_broker("demo").orders.clear()
+    with session() as s:
+        for p_ in s.scalars(select(Position)):
+            p_.status = "closed"; p_.profit = 1.0
+        s.commit()
     # one symbol proven, and its strategy fires on the last candle
     kv_set("strategies", {"EURUSD": {"tf": 3, "strategy": "pullback", "session": "all", "stop_k": 1.5, "rr": 1.5, "train": {}, "test": {}}})
     monkeypatch.setattr(strategies, "signal", lambda df, name, session="all": pd.Series(1, index=df.index))
     engine.run_cycle(force=True)
     opened = [o for o in brk.get_broker("demo").orders]
-    assert len(opened) == 1
+    assert any(o["symbol"] == "EURUSD" for o in opened)
     with session() as s:
-        row = s.scalars(select(Signal).where(Signal.status == "executed")).one()
+        row = [x for x in s.scalars(select(Signal).where(Signal.status == "executed")) if x.symbol == "EURUSD"][-1]
         assert row.symbol == "EURUSD" and row.levels["strategy"] == "pullback" and abs(row.levels["stop"] / row.levels["atr"] - 1.5) < 0.05
-        pos = s.scalars(select(Position).where(Position.symbol == "EURUSD")).one()
+        pos = s.scalars(select(Position).where(Position.symbol == "EURUSD").order_by(Position.signal_id.desc())).first()
         pos.status, pos.profit, pos.closed_at = "closed", -5.0, engine.utcnow()   # it lost
         s.commit()
-    n = len(brk.get_broker("demo").orders)
+    n = sum(o["symbol"] == "EURUSD" for o in brk.get_broker("demo").orders)
     engine.run_cycle(force=True)
-    assert len(brk.get_broker("demo").orders) == n      # the same symbol and direction is sat out after the loss
+    assert sum(o["symbol"] == "EURUSD" for o in brk.get_broker("demo").orders) == n      # the same symbol and direction is sat out after the loss
     kv_set("strategy_mode", False)
 
 

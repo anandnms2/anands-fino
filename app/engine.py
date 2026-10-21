@@ -297,7 +297,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         strat_note, st_ = None, strats.get(sym)
         if strat_mode:   # trade only what has been proven on past data, on the candle size it was proven on
             if st_ is None:
-                comb, strat_note = {**comb, "bias": "NONE"}, "no strategy has been proven on past data for this symbol (see the Strategies page)"
+                pass   # nothing proven yet for this symbol: it still trades on the normal score rules, and is marked UNPROVEN
             else:
                 sg_ = int(strategies.signal(dfs[sym], st_["strategy"], st_["session"]).iloc[-1])
                 if sg_ == 0:
@@ -309,7 +309,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(tf), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
                           agree=comb["agree"], available=comb["available"], factors=factors, venue=venue,
                           mode=(f"{venue}:{'auto' if vctx[venue]['auto'] else 'manual'}" if venue in vctx else ""),
-                          context={"closes": closes[sym]})
+                          context={"closes": closes[sym], "strategy": (st_["strategy"] if st_ else "unproven") if strat_mode else "off"})
 
         sig = mk()
         if comb["bias"] == "NONE":
@@ -1033,7 +1033,7 @@ def state() -> dict:
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},
-        "tune": tune_table(), "strategy_mode": strategy_mode(), "strategies": kv_get("strategies") or {},
+        "tune": tune_table(), "strategy_mode": strategy_mode(), "strategies": kv_get("strategies") or {}, "bt_state": (kv_get("backtest") or {}).get("state", "never run"),
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

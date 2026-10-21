@@ -4,13 +4,13 @@ import pandas as pd
 from app import backtest, strategies
 
 
-def _bars(n=900, seed=1, drift=0.0, vol=0.0006):
+def _bars(n=4600, seed=1, drift=0.0, vol=0.0006):
     rng = np.random.default_rng(seed)
     c = 1.1 * np.exp(np.cumsum(rng.normal(drift, vol, n)))
     o = np.r_[c[0], c[:-1]]
     h = np.maximum(o, c) * (1 + abs(rng.normal(0, vol / 3, n)))
     l = np.minimum(o, c) * (1 - abs(rng.normal(0, vol / 3, n)))
-    return pd.DataFrame({"time": 1_700_000_000 + np.arange(n) * 900, "open": o, "high": h, "low": l, "close": c})
+    return pd.DataFrame({"time": 1_700_000_000 + np.arange(n) * 3600, "open": o, "high": h, "low": l, "close": c})
 
 
 def test_simulate_target_and_stop_and_spread():
@@ -33,7 +33,7 @@ def test_simulate_target_and_stop_and_spread():
 def test_costs_make_a_random_market_unprofitable_and_nothing_validates_by_luck():
     wins = 0
     for seed in range(4):
-        row = backtest.test_symbol("EURUSD", 15, _bars(seed=seed))
+        row = backtest.test_symbol("EURUSD", 60, _bars(seed=seed))
         assert row["baseline_test"] is not None
         wins += row["ok"]
     assert wins <= 1      # a coin-flip market must not hand out validated setups
@@ -53,3 +53,9 @@ def test_choose_keeps_only_validated_setups():
             {"symbol": "B", "tf": 15, "ok": False, "best": None}]
     ch = backtest.choose(rows)
     assert set(ch) == {"A"} and ch["A"]["strategy"] == "breakout" and ch["A"]["tf"] == 60
+
+
+def test_history_shorter_than_six_months_is_refused():
+    import pytest
+    with pytest.raises(RuntimeError, match="180 needed"):
+        backtest.test_symbol("EURUSD", 60, _bars(2000))     # about 83 days

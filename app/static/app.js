@@ -164,6 +164,15 @@ function renderBanners() {
   $("banners").innerHTML = h;
 }
 
+/* strategy status badge: PROVEN (with the strategy and candle), TESTING while a backtest runs, UNPROVEN when nothing has passed yet */
+function stratBadge(sym) {
+  const st = S.st;
+  if (!st.strategy_mode) return `<i class="sb off" title="Strategy mode is off: trading on the score rules">SCORE</i>`;
+  const x = (st.strategies || {})[sym];
+  if (x) return `<i class="sb ok" title="Proven on unseen data: ${esc(x.strategy)}, ${x.tf}m candles, stop ${x.stop_k} ATR, target ${x.rr}x. Unseen: ${x.test.n} trades, ${num(x.test.exp, 2)}R each, PF ${num(x.test.pf, 2)}">PROVEN · ${esc(x.strategy)}</i>`;
+  if (st.bt_state === "running") return `<i class="sb test" title="A backtest is running">TESTING</i>`;
+  return `<i class="sb un" title="No setup has passed the backtest yet. It still trades on the normal score rules, with the same risk gate.">UNPROVEN</i>`;
+}
 /* watchlist */
 function latestFor(sym) { return S.latest.find((r) => r.symbol === sym); }
 function renderWatch() {
@@ -172,7 +181,7 @@ function renderWatch() {
   $("wl").innerHTML = list.map((s) => {
     const r = latestFor(s), sc = r ? r.score : null;
     return `<div class="wl-r ${s === S.sym ? "sel" : ""}" role="button" tabindex="0" onclick="pickSym('${s}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickSym('${s}')}" aria-pressed="${s === S.sym}">
-      <span><b>${esc(s)}</b><i class="mute">${esc(r ? r.timeframe : "")}</i></span><span class="mono" id="wb-${s}">–</span><span class="mono" id="wa-${s}">–</span>
+      <span><b>${esc(s)}</b><i class="mute">${esc(r ? r.timeframe : "")}</i>${stratBadge(s)}</span><span class="mono" id="wb-${s}">–</span><span class="mono" id="wa-${s}">–</span>
       <span class="mono sc ${sc == null || Math.abs(sc) < (st.thresholds.score || 20) ? "mute" : sc > 0 ? "ok" : "bad"}">${sc == null ? "–" : (sc > 0 ? "+" : "") + Math.round(sc)}</span></div>`;
   }).join("");
   updateWatch();
@@ -192,7 +201,7 @@ window.pickSym = (s) => { S.sym = s; syncStream(); localStorage.setItem("fs", s)
 /* chart header */
 function renderHead() {
   const st = S.st, v = st.venues[S.venue] || {};
-  $("chead").innerHTML = `<div class="ch-l"><b class="sym">${esc(S.sym)}</b><span class="mono big" id="hb">–</span><span class="mono mute" id="hs"></span></div>
+  $("chead").innerHTML = `<div class="ch-l"><b class="sym">${esc(S.sym)}</b>${stratBadge(S.sym)}<span class="mono big" id="hb">–</span><span class="mono mute" id="hs"></span></div>
     <div class="buysell"><button class="bs buy" onclick="openTicket('BUY')">BUY</button><button class="bs sell" onclick="openTicket('SELL')">SELL</button></div>
     <div class="tfs" role="group" aria-label="Chart candle size">${st.timeframes.map((m) => `<button aria-pressed="${m === S.tf}" onclick="pickTf(${m})">${m === 60 ? "1h" : m + "m"}</button>`).join("")}</div>`;
   updateHead();
@@ -340,7 +349,7 @@ function renderBottom() {
   if (S.tab === "pos") {
     h = `<div class="tw"><div class="ptable"><div class="prow head"><span>SYMBOL</span><span>SIDE</span><span>LOTS</span><span>ENTRY</span><span>LIVE</span><span>STOP</span><span>TARGET</span><span>STOP ◂ PRICE ▸ TARGET</span><span class="r">P/L</span><span class="r">R</span><span></span></div>
       ${mine.map((p) => `<div class="prow" data-k="${p.venue}:${p.ticket}" data-e="${p.entry}" data-sl="${p.sl}" data-tp="${p.tp}" data-side="${p.side}">
-        <span><a href="#/" class="symlink" title="Open ${esc(p.symbol)} chart" onclick="openTrade('${p.venue}','${esc(p.symbol)}',${p.tf || 0});return false"><b>${esc(p.symbol)}</b>${p.tf ? ` <i class="mute tfm">${p.tf >= 60 ? p.tf / 60 + "h" : p.tf + "m"}</i>` : ""}</a> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
+        <span><a href="#/" class="symlink" title="Open ${esc(p.symbol)} chart" onclick="openTrade('${p.venue}','${esc(p.symbol)}',${p.tf || 0});return false"><b>${esc(p.symbol)}</b>${stratBadge(p.symbol)}${p.tf ? ` <i class="mute tfm">${p.tf >= 60 ? p.tf / 60 + "h" : p.tf + "m"}</i>` : ""}</a> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
         <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span class="mono bad">${pxs(p.sl, p.symbol)}</span><span class="mono ok">${pxs(p.tp, p.symbol)}</span>
         <span class="pbar"><i class="pf"></i><i class="pn"></i></span><span class="mono r pl ${p.floating < 0 ? "bad" : "ok"}"><b>${money(p.floating)}</b></span><span class="mono r pr">–</span>
         <button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></div>`).join("") || '<div class="pad mute" style="padding-top:16px">Nothing open on this venue.</div>'}</div></div>`;
@@ -607,11 +616,11 @@ let btTimer = null;
 async function strategiesPage() {
   const d = await api("/api/backtest"), st = S.st, rows = (d.rows || []).slice().sort((a, b) => a.symbol.localeCompare(b.symbol) || a.tf - b.tf);
   const run = d.state === "running", live = d.live_set || {};
-  const pf = (t) => (t ? `${t.n} trades · ${num(t.win, 0)}% win · ${t.exp >= 0 ? "+" : ""}${num(t.exp, 2)}R · PF ${num(t.pf, 2)}` : "–");
-  let h = pageHead("Strategies", "Setups are tested on past candles with the spread paid, chosen on the first 60% and judged on the last 40% they never saw",
+  const pf = (t) => (t ? `${t.n} trades · ${num(t.win, 0)}% win · ${t.exp >= 0 ? "+" : ""}${num(t.exp, 2)}R · PF ${num(t.pf, 2)}${t.t != null ? " · t " + num(t.t, 1) : ""}` : "–");
+  let h = pageHead("Strategies", "Tested on at least 6 months of hourly candles with the spread paid, chosen on the first 60% and judged on the last 40% they never saw",
     `<button class="btn pri" ${run ? "disabled" : ""} onclick="act('/api/backtest/run',{},'Backtest started')">${run ? "Running " + d.done + "/" + d.total : "Run backtest now"}</button>`);
-  h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Trade only proven setups</b><div class="mute" style="font-size:12px">On: a symbol trades only with a setup that earned on data it was not tuned on, on that setup's candle size. Off: the old score-only entries.</div></div>${swBtn(d.strategy_mode, "Strategy mode", "/api/strategy-mode", `{on:${!d.strategy_mode}}`, d.strategy_mode ? "Turn strategy mode OFF? The old score-only entries (which lost money) trade again." : "")}</div>
-    <div class="note">Status: <b>${esc(d.state)}</b>${d.finished ? " · finished " + hm(d.finished) : ""}${d.error ? " · " + esc(d.error) : ""}. Live now: <b class="acc">${Object.keys(live).length}</b> symbol(s) cleared to trade${Object.keys(live).length ? ": " + Object.entries(live).map(([k, v]) => `${esc(k)} ${esc(v.strategy)} ${v.tf}m`).join(", ") : ". Nothing has been proven yet, so nothing trades in strategy mode until a backtest finds a setup that holds up"}.</div>
+  h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Trade only proven setups</b><div class="mute" style="font-size:12px">On: a symbol with a proven setup trades only that setup, on its candle size; a symbol with none yet still trades on the score rules and is marked UNPROVEN. Off: score rules only.</div></div>${swBtn(d.strategy_mode, "Strategy mode", "/api/strategy-mode", `{on:${!d.strategy_mode}}`, d.strategy_mode ? "Turn strategy mode OFF? The old score-only entries (which lost money) trade again." : "")}</div>
+    <div class="note">Status: <b>${esc(d.state)}</b>${d.finished ? " · finished " + hm(d.finished) : ""}${d.error ? " · " + esc(d.error) : ""}. Live now: <b class="acc">${Object.keys(live).length}</b> symbol(s) cleared to trade${Object.keys(live).length ? ": " + Object.entries(live).map(([k, v]) => `${esc(k)} ${esc(v.strategy)} ${v.tf}m`).join(", ") : ". Nothing has been proven yet, so every symbol trades on the score rules (marked UNPROVEN)"}.</div>
     <p class="mute" style="font-size:12px;margin:8px 0 0">A backtest is evidence, not a promise: markets change, and testing many setups always turns up some that look good by luck. That is why a setup must also earn on the unseen 40%, with enough trades. Re-run it weekly; results for the old score-style entries on the same data are shown for comparison.</p></div></section>`;
   h += `<section class="card"><div class="tw"><table style="min-width:980px"><thead><tr><th>Symbol</th><th>Candles</th><th>Best setup (picked on the first 60%)</th><th>First 60%</th><th>Unseen 40%</th><th>Old entries, unseen</th><th class="r">Verdict</th></tr></thead><tbody>
     ${rows.map((r) => { const b = r.best; return `<tr><td><b>${esc(r.symbol)}</b></td><td class="mono">${r.tf}m</td><td>${b ? `${esc(b.strategy)} · stop ${b.stop_k} ATR · target ${b.rr}× · ${b.session === "all" ? "all hours" : "London/NY"}` : '<span class="mute">nothing earned on the first 60%</span>'}</td>
