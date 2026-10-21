@@ -209,9 +209,28 @@ def profile_name() -> str:
     return base.profile if base.profile in PROFILES else "fast"
 
 
+RISK_FIELDS = {  # dashboard-editable risk limits: (minimum, maximum, whole number?)
+    "risk_per_trade_pct": (0.01, 5.0, False),
+    "daily_loss_cap_pct": (0.1, 20.0, False),
+    "max_open": (1, 30, True),
+    "max_loss_streak": (1, 30, True),
+    "min_rr": (0.5, 5.0, False),
+}
+
+
+def risk_overrides() -> dict:
+    try:
+        from .db import kv_get
+
+        raw = kv_get("risk") or {}
+    except Exception:  # noqa: BLE001  (database not ready yet)
+        return {}
+    return {k: raw[k] for k in RISK_FIELDS if k in raw}
+
+
 def get_settings() -> Settings:
     base = _base()
-    over = PROFILES.get(profile_name(), {})
+    over = {**PROFILES.get(profile_name(), {}), **risk_overrides()}   # limits set by hand beat both the profile and the environment
     return base.model_copy(update=over) if over else base
 
 

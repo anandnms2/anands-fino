@@ -344,3 +344,21 @@ def test_paper_tick_uses_fresh_quote_and_fast_tick_never_blocks():
     import pytest
     with pytest.raises(paper.BrokerError):
         b.tick_fast("EURUSD")
+
+
+def test_risk_limits_editable_validated_and_reset():
+    import pytest
+    from fastapi import HTTPException
+    from app import main
+    from app.config import get_settings
+
+    base = get_settings().daily_loss_cap_pct
+    main.api_risk({"daily_loss_cap_pct": 4.5, "max_open": 7})
+    c = get_settings()
+    assert c.daily_loss_cap_pct == 4.5 and c.max_open == 7
+    for bad in ({"max_open": 0}, {"daily_loss_cap_pct": 99}, {"risk_per_trade_pct": "x"}, {"nope": 1}):
+        with pytest.raises(HTTPException):
+            main.api_risk(bad)
+    assert get_settings().max_open == 7          # a rejected change leaves the saved limits alone
+    main.api_risk({"reset": True})
+    assert get_settings().daily_loss_cap_pct == base

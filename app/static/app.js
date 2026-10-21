@@ -29,6 +29,7 @@ async function act(path, body, ok) {
   render();
 }
 window.act = act;
+window.saveRisk = () => { const b = {}; ["risk_per_trade_pct", "daily_loss_cap_pct", "max_open", "max_loss_streak", "min_rr"].forEach((k) => { const el = document.getElementById("rk_" + k); if (el) b[k] = Number(el.value); }); act("/api/risk", b, "Risk limits saved"); };
 window.askAct = (msg, path, ok) => { if (confirm(msg)) act(path, {}, ok); };
 
 const VLABEL = { paper: "Paper", demo: "Demo", live: "Live" };
@@ -382,8 +383,10 @@ async function settings() {
     <section class="card sec" id="s-profile"><h2>Trading profile</h2><p class="mute">Fast takes more trades with looser entry filters. Loss limits, news blackout, spread checks and the Live lock apply in both.</p>
       <div class="seg0"><button class="btn ${fast ? "pri" : ""}" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn ${fast ? "" : "pri"}" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div>
       <div class="ptab"><span class="lab">RULE</span><span class="lab r">FAST</span><span class="lab r">NORMAL</span>${prof.map(([a, f, n]) => `<span>${a}</span><span class="mono r ${fast ? "acc" : "mute"}">${f}</span><span class="mono r ${fast ? "mute" : "acc"}">${n}</span>`).join("")}</div></section>
-    <section class="card sec" id="s-risk"><h2>Risk limits</h2><p class="mute">Enforced in code on every venue. A venue pauses itself when a loss limit is hit. Values come from the environment.</p>
-      ${kv("Risk per trade", r.risk_per_trade_pct + "%")}${kv("Daily loss limit", r.daily_loss_cap_pct + "%")}${kv("Max open trades", r.max_open)}${kv("Losses in a row before pause", r.max_loss_streak)}${kv("Total open risk limit", num(r.open_risk_cap_pct, 1) + "%")}${kv("Minimum reward : risk", th.min_rr)}</section>
+    <section class="card sec" id="s-risk"><h2>Risk limits</h2><p class="mute">Enforced in code on every venue. A venue pauses itself when a loss limit is hit. Change a value and press Save: it applies from the next check and overrides the profile and the environment.${r.custom ? ' <span class="pill acc">custom</span>' : ""}</p>
+      ${[["risk_per_trade_pct", "Risk per trade (% of equity)", r.risk_per_trade_pct, "0.05"], ["daily_loss_cap_pct", "Daily loss limit (%)", r.daily_loss_cap_pct, "0.1"], ["max_open", "Max open trades", r.max_open, "1"], ["max_loss_streak", "Losses in a row before pause", r.max_loss_streak, "1"], ["min_rr", "Minimum reward : risk", r.min_rr, "0.1"]].map(([k, l, v, stp]) => `<div class="krow"><span>${l}</span><input id="rk_${k}" class="mono" type="number" step="${stp}" value="${v}" aria-label="${l}" style="width:100px;text-align:right"></div>`).join("")}
+      ${kv("Total open risk limit", num(r.open_risk_cap_pct, 1) + "%")}
+      <div style="display:flex;gap:10px;margin-top:12px"><button class="btn pri sm" onclick="saveRisk()">Save limits</button>${r.custom ? `<button class="btn sm" onclick="if(confirm('Go back to the environment values?'))act('/api/risk',{reset:true},'Risk limits reset')">Reset to default</button>` : ""}</div></section>
     <section class="card sec" id="s-ai"><h2>Claude and the rules</h2><p class="mute">The rules score a setup in code. Claude gives the final YES or NO on every trade that clears the gate.</p>
       <div class="krow big"><div><b>Claude veto</b><div class="mute" style="font-size:12px">On: Claude can say NO. Off: trades follow the score and the gate alone.</div></div>${swBtn(st.claude_veto, "Claude veto", "/api/claude-veto", `{on:${!st.claude_veto}}`, st.claude_veto ? "Turn Claude's veto OFF? Trades will then follow the score and the risk gate alone." : "")}</div>
       ${kv("Score threshold", "±" + th.score)}${kv("Factors that must agree", th.agree_pct ? th.agree_pct + "%" : th.agree)}${kv("Claude calls today", `${u.claude} / ${u.claude_cap}`)}</section>
