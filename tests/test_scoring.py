@@ -43,3 +43,15 @@ def test_indicators():
     df = pd.DataFrame({"open": [10, 10.5, 9.5], "high": [11, 11, 10.6], "low": [9, 9.8, 9.4], "close": [10.5, 9.7, 10.5]})
     assert ind.candle_pattern(df) == ("bullish engulfing", 1)
     assert ind.clip(250) == 100.0
+
+
+def test_extract_json_keeps_list_of_objects_and_wrapped_lists():
+    from app.llm import extract_json
+    from app.sentiment import _valid
+
+    syms = ["XAUUSD", "EURUSD"]
+    assert extract_json('Sure:\n```json\n[{"i":0,"XAUUSD":1},{"i":1,"XAUUSD":-1}]\n```') == [{"i": 0, "XAUUSD": 1}, {"i": 1, "XAUUSD": -1}]
+    assert extract_json('{"a": 1}') == {"a": 1}
+    rows = _valid(extract_json('[{"i":0,"XAUUSD":1,"EURUSD":5},{"i":1,"XAUUSD":-1}]'), 2, syms)
+    assert rows[0] == {"XAUUSD": 1, "EURUSD": 0} and rows[1]["XAUUSD"] == -1
+    assert 0 in _valid(extract_json('{"tags":[{"i":0,"XAUUSD":1}]}'), 1, syms)

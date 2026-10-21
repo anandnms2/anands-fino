@@ -19,6 +19,9 @@ def _prompt(titles: list[str], symbols: list[str]) -> str:
 
 def _valid(obj, n: int, symbols: list[str]) -> dict[int, dict]:
     out = {}
+    if isinstance(obj, dict):  # some models wrap the list: {"tags": [...]} or return a single object
+        inner = next((v for v in obj.values() if isinstance(v, list)), None)
+        obj = inner if inner is not None else [obj]
     if not isinstance(obj, list):
         raise LLMError("tag reply was not a list")
     for row in obj:

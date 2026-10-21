@@ -71,10 +71,8 @@ def extract_json(text: str):
     """First JSON object or array in a model reply. Raises LLMError when there is none."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.M).strip()
-    for opener, closer in (("{", "}"), ("[", "]")):
-        a = text.find(opener)
-        if a == -1:
-            continue
+    starts = sorted((text.find(o), o, c) for o, c in (("{", "}"), ("[", "]")) if text.find(o) != -1)
+    for a, opener, closer in starts:  # whichever bracket opens first, so a list of objects stays a list
         depth = 0
         for i in range(a, len(text)):
             if text[i] == opener:
