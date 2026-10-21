@@ -31,5 +31,6 @@ def fresh_db():
     broker.set_broker(broker.MockBroker())
     from app import collectors
 
+    db.kv_set("claude_veto", True)   # the older tests exercise Claude's veto; its switch has its own test
     collectors.save_snapshot("calendar", [])  # a loaded, empty calendar: no events, so no blackout
     yield
