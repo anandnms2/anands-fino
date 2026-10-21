@@ -190,14 +190,14 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
     """One analysis pass on `tf` minute candles for the venues in `vctx`; returns {symbol: outcome}."""
     # one set of candles for the analysis: a trading venue's broker if there is one, else demo or the paper feed
     order = [v for v in ("demo", "live", "paper") if v in vctx] or ["demo", "paper"]
-    broker = None
+    broker, data_is_paper = None, False
     for v in order:
         try:
             b = vctx[v]["broker"] if v in vctx else get_broker(v)
             b.connect()
             sync_offset(b, cfg)
             b.account()
-            broker = b
+            broker, data_is_paper = b, (v == "paper")
             break
         except BrokerError as e:
             log(f"Price source {V.LABEL[v]} unavailable: {e}", "warn")
@@ -225,7 +225,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             continue
         last_open = closed["time"].iloc[-1]
         age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
-        stale[sym] = (not force) and age_min > 4 * tf + 2
+        stale[sym] = (not force) and age_min > 4 * tf + (12 if data_is_paper else 2)   # free feeds lag, metals most
         techs[sym] = compute_technicals(closed, info["digits"], tf)
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
@@ -280,12 +280,12 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             elif not cfg.min_agree_pct and comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
-            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads)
+            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads or 1.05 / cfg.max_spread_to_stop)
             sid = _save(sig)
             results[sym] = sig.status
             continue
 
-        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads)
+        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads or 1.05 / cfg.max_spread_to_stop)
         sig.levels = levels
         if not vctx:
             sig.status, sig.reason = "alerted", "No trading venue is switched on: signal recorded, no order"
@@ -302,7 +302,10 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         for v, c in vctx.items():
             try:
                 vb = c["broker"]
-                vinfo, vtick = vb.symbol_info(cfg.broker_symbol(sym)), vb.tick(cfg.broker_symbol(sym))
+                if vb is broker:   # same source as the analysis: use the very same quote, not a fresh one a moment later
+                    vinfo, vtick = info, tick
+                else:
+                    vinfo, vtick = vb.symbol_info(cfg.broker_symbol(sym)), vb.tick(cfg.broker_symbol(sym))
             except BrokerError as e:
                 log(f"{sym} on {V.LABEL[v]}: {e}", "error", sym)
                 continue

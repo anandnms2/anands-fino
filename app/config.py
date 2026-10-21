@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     timeframe_min: int = 3             # candle size the whole analysis runs on (1, 2, 3, 4, 5, 10, 15, 30 or 60); one cycle per candle
     min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
-    min_stop_spreads: float = 10.5     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
+    min_stop_spreads: float = 0.0      # 0 = derived from MAX_SPREAD_TO_STOP (stop at least 1.05 / that many spreads)     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
     claude_cooldown_min: int = 15      # after Claude says NO to a symbol and direction, do not ask again for this long
     run_cycle_on_start: bool = False
     scheduler_enabled: bool = True
