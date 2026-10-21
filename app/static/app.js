@@ -61,8 +61,8 @@ const $ = (id) => document.getElementById(id);
 
 function startStream() {
   if (S.es || !window.EventSource) return;
-  const es = new EventSource("/api/stream");
-  S.es = es;
+  const es = new EventSource("/api/stream" + (S.sym ? "?sym=" + S.sym : ""));
+  S.es = es; S.esSym = S.sym;
   es.onmessage = (e) => {
     let d; try { d = JSON.parse(e.data); } catch (_) { return; }
     S.lat = Math.max(0, Date.now() - d.ts);
@@ -78,6 +78,7 @@ function startStream() {
   es.onerror = () => { S.lat = -1; setLat(); };
 }
 
+function syncStream() { if (S.es && S.esSym !== S.sym && S.sym) { S.es.close(); S.es = null; startStream(); } }
 function onTick() {
   barLive();
   if (pageName() !== "terminal" || !S.mounted || !S.st) return;
@@ -147,6 +148,7 @@ async function terminal() {
   const [st, latest, pos, appr, actv] = await Promise.all([api("/api/state"), api("/api/signals/latest"), api("/api/positions"), api("/api/approvals"), api("/api/activity?limit=30")]);
   Object.assign(S, { st, latest, posd: pos, appr, actv });
   if (!st.symbols.includes(S.sym)) S.sym = st.symbols[0] || "";
+  syncStream();
   if (!S.tf) S.tf = (st.venues[S.venue] || {}).tf || 1;
   renderBar(); renderBanners(); renderWatch(); renderHead(); renderBottom(); renderSide(); loadCandles();
 }
@@ -183,7 +185,7 @@ function updateWatch() {
     b.className = a.className = "mono " + c;
   }
 }
-window.pickSym = (s) => { S.sym = s; localStorage.setItem("fs", s); S.candleKey = ""; renderWatch(); renderHead(); renderSide(); renderBottom(); loadCandles(); };
+window.pickSym = (s) => { S.sym = s; syncStream(); localStorage.setItem("fs", s); S.candleKey = ""; renderWatch(); renderHead(); renderSide(); renderBottom(); loadCandles(); };
 
 /* chart header */
 function renderHead() {

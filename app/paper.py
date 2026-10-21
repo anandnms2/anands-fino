@@ -128,6 +128,74 @@ def fetch_candles(symbol: str, tf_min: int = 60) -> pd.DataFrame:
     return _twelvedata(symbol, tf_min) if feed == "twelvedata" else _yahoo(symbol, tf_min)
 
 
+# ------------------------------------------------------------------ live quotes
+# The candle feed refreshes about once a minute. A small poller keeps a fresher last price for the symbols that matter
+# (open trades and the symbol on screen every ~2 s, the rest every ~20 s), so the terminal moves like a live quote.
+_quotes: dict[str, tuple[float, float]] = {}   # symbol -> (fetched at, mid price)
+_hot: dict[str, float] = {}                    # symbol -> last time somebody asked for it live
+_poller_on = False
+
+
+def _yahoo_last(symbol: str) -> float | None:
+    for ysym in YAHOO.get(symbol, [f"{symbol}=X"]):
+        try:
+            r = httpx.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}", params={"interval": "1m", "range": "1d"}, headers=UA, timeout=8, follow_redirects=True)
+            r.raise_for_status()
+            px = r.json()["chart"]["result"][0]["meta"].get("regularMarketPrice")
+            if px:
+                return float(px)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def want_live(symbols) -> None:
+    now = time.time()
+    for sy in symbols:
+        _hot[sy] = now
+
+
+def quote_age(symbol: str) -> float | None:
+    q = _quotes.get(symbol)
+    return None if q is None else time.time() - q[0]
+
+
+def _poll_loop() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    ex = ThreadPoolExecutor(max_workers=4)
+    while True:
+        t0 = time.time()
+        try:
+            cfg = get_settings()
+            if cfg.paper_feed == "yahoo":
+                due = []
+                for sy in cfg.symbol_list:
+                    age = quote_age(sy)
+                    hot = t0 - _hot.get(sy, 0) < 20
+                    gap = 2.0 if hot else 20.0
+                    if age is None or age >= gap:
+                        due.append((0 if hot else 1, -(age or 1e9), sy))
+                due.sort()
+                batch = [d[2] for d in due[:4]]
+                for sy, px in zip(batch, ex.map(_yahoo_last, batch)):
+                    if px:
+                        _quotes[sy] = (time.time(), px)
+                    else:
+                        _quotes[sy] = (time.time() - 10, _quotes[sy][1]) if sy in _quotes else (time.time(), 0.0)
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(max(0.2, 1.0 - (time.time() - t0)))
+
+
+def start_quotes() -> None:
+    global _poller_on
+    if _poller_on:
+        return
+    _poller_on = True
+    threading.Thread(target=_poll_loop, name="paper-quotes", daemon=True).start()
+
+
 # ------------------------------------------------------------------ the broker
 class PaperBroker:
     def __init__(self):
@@ -222,9 +290,31 @@ class PaperBroker:
 
     def tick(self, symbol: str) -> dict:
         s = symbol.upper()
+        q = _quotes.get(s)
+        if q and q[1] and time.time() - q[0] < 30:
+            mid, sp = q[1], self._spread(s)
+            return {"bid": mid - sp / 2, "ask": mid + sp / 2, "time": int(q[0])}
         df = self._candles(s)
         mid, sp = float(df["close"].iloc[-1]), self._spread(s)
         return {"bid": mid - sp / 2, "ask": mid + sp / 2, "time": int(df["time"].iloc[-1])}
+
+    def tick_fast(self, symbol: str) -> dict:
+        """Last known price from the caches only: never waits for the network or the candle lock (the terminal stream uses this)."""
+        s = symbol.upper()
+        q = _quotes.get(s)
+        if q and q[1] and time.time() - q[0] < 30:
+            mid = q[1]
+        else:
+            hit = None
+            for (sy, _tf), v in list(self._cache.items()):
+                if sy == s:
+                    hit = v
+                    break
+            if not hit:
+                raise BrokerError("no price yet")
+            mid = float(hit[1]["close"].iloc[-1])
+        sp = self._spread(s)
+        return {"bid": mid - sp / 2, "ask": mid + sp / 2, "time": int(time.time())}
 
     # ---- simulated fills ----
     def _pnl(self, p: dict, exit_price: float) -> float:

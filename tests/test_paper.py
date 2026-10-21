@@ -329,3 +329,18 @@ def test_paper_balance_is_editable_and_survives_reset():
     for bad in (5, "x", None, float("nan")):
         with pytest.raises(HTTPException):
             main.api_paper_balance({"balance": bad})
+
+
+def test_paper_tick_uses_fresh_quote_and_fast_tick_never_blocks():
+    import time
+    from app import paper
+    b = paper.get_paper()
+    paper._quotes["EURUSD"] = (time.time(), 1.2345)
+    t = b.tick("EURUSD")
+    assert abs((t["bid"] + t["ask"]) / 2 - 1.2345) < 1e-9
+    assert abs((b.tick_fast("EURUSD")["bid"] + b.tick_fast("EURUSD")["ask"]) / 2 - 1.2345) < 1e-9
+    paper._quotes.pop("EURUSD")
+    b._cache.clear()
+    import pytest
+    with pytest.raises(paper.BrokerError):
+        b.tick_fast("EURUSD")

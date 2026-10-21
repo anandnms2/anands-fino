@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(job("macro", collectors.fetch_macro), "interval", hours=6, max_instances=1, coalesce=True)
         scheduler.add_job(job("cot", collectors.fetch_cot), "interval", hours=12, max_instances=1, coalesce=True)
         scheduler.start()
+        from .paper import start_quotes
+        start_quotes()
         for name, fn in (("calendar", collectors.fetch_calendar), ("macro", collectors.fetch_macro),
                          ("cot", collectors.fetch_cot), ("news", refresh_news)):
             scheduler.add_job(job(name, fn), "date", run_date=None)
@@ -206,10 +208,13 @@ def api_watch(body: dict = Body(...)):
 
 
 @app.get("/api/stream")
-def api_stream():
+def api_stream(sym: str = ""):
     """Server-sent events: live bid/ask for every symbol on each active venue, plus the live value of every open trade, about 4 times a second."""
+    wanted = sym
+
     def gen():
         cfg = get_settings()
+        focus = [x for x in wanted.upper().split(",") if x in cfg.symbol_list][:3]
         opens, opens_at, pvs = [], 0.0, {}
         while True:
             t0 = time.time()
@@ -226,9 +231,12 @@ def api_stream():
                     except BrokerError:
                         continue
                     row = {}
+                    if v == "paper":
+                        from .paper import want_live
+                        want_live({p["symbol"] for p in opens if p["venue"] == "paper"} | set(focus))
                     for sym in cfg.symbol_list:
                         try:
-                            tk = b.tick(cfg.broker_symbol(sym))
+                            tk = (b.tick_fast if hasattr(b, "tick_fast") else b.tick)(cfg.broker_symbol(sym))
                             row[sym] = [tk["bid"], tk["ask"]]
                         except BrokerError:
                             continue
