@@ -114,7 +114,8 @@ class Settings(BaseSettings):
     timeframe_min: int = 3             # candle size the whole analysis runs on (1, 2, 3, 4, 5, 10, 15, 30 or 60); one cycle per candle
     min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
-    min_stop_spreads: float = 0.0      # 0 = derived from SPREAD_STOP_LIMIT (stop at least 1.05 / that many spreads)     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
+    stop_floor_spreads: float = 0.0    # 0 = derived from SPREAD_STOP_LIMIT (stop at least 1.05 / that many spreads); renamed from MIN_STOP_SPREADS, whose old value Coolify froze at 12
+    max_tp_atr: float = 3.0            # the target is never further than this many ATRs when the risk:reward allows (a 7 ATR target is never reached)
     trail_on: bool = True              # trailing stop: lock profit as a trade moves in our favour (the dashboard switch overrides)
     trail_start_r: float = 1.0         # at this many R of profit (R = the first stop distance) the stop moves to break-even plus TRAIL_LOCK_R
     trail_lock_r: float = 0.2
@@ -179,7 +180,7 @@ class Settings(BaseSettings):
 # "fast" trades often: looser entry filters and a short Claude cooldown. The loss limits, the news blackout, the stop
 # and spread cost checks, Claude's YES/NO and the Live lock are the same in both profiles.
 PROFILES = {
-    "fast": {"score_threshold": 20.0, "min_agree_pct": 50.0, "min_atr_to_spread": 1.5, "max_stop_atr": 6.0, "auto_tf_atr_spreads": 2.5,
+    "fast": {"score_threshold": 20.0, "min_agree_pct": 50.0, "min_atr_to_spread": 1.5, "max_stop_atr": 4.0, "auto_tf_atr_spreads": 2.5,
              "claude_cooldown_min": 5, "min_confidence": 0.55, "max_open": 5, "min_rr": 1.3},
     "normal": {},
 }

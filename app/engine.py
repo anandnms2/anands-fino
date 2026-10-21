@@ -301,12 +301,12 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             elif not cfg.min_agree_pct and comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
-            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads or 1.05 / cfg.spread_stop_limit)
+            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
             sid = _save(sig)
             results[sym] = sig.status
             continue
 
-        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads or 1.05 / cfg.spread_stop_limit)
+        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
         sig.levels = levels
         if not vctx:
             sig.status, sig.reason = "alerted", "No trading venue is switched on: signal recorded, no order"

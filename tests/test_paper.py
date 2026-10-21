@@ -276,3 +276,13 @@ def test_reconcile_moves_stop_on_broker():
     assert abs(mb._positions[tk]["sl"] - 100.2) < 1e-6
     with session() as s:
         assert abs(s.get(Position, (tk, "demo")).sl - 100.2) < 1e-6
+
+
+def test_target_is_capped_in_atr():
+    from app import scoring
+    tech = {"atr": 1.0, "swing_lows": [], "swing_highs": []}
+    tick = {"bid": 100.0, "ask": 100.0}
+    lv = scoring.build_levels("BUY", tech, tick, 2, 3.0, 2.0, 0.0, 3.0, 1.5)   # stop 3 ATR, 2R would be a 6 ATR target
+    assert abs(lv["tp"] - 104.5) < 1e-9 and lv["rr"] == 1.5                     # capped at the 1.5R floor, not 3 ATR (below it)
+    lv = scoring.build_levels("BUY", tech, tick, 2, 1.5, 2.0, 0.0, 3.0, 1.5)    # stop 1.5 ATR: 2R = 3 ATR, within the cap
+    assert abs(lv["tp"] - 103.0) < 1e-9 and lv["rr"] == 2.0

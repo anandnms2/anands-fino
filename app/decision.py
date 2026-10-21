@@ -5,13 +5,13 @@ from .llm import LLMError, claude_chat, extract_json
 
 SYSTEM = """You are the final decision-maker on a forex and metals desk. Code has already scored the setup and checked the hard risk limits. You decide whether to take the trade.
 
-Default to NO. Answer YES only when the evidence agrees, the levels make sense, and you cannot name a strong reason to wait.
+Be a sceptic, not an obstructionist. The score, factor agreement, spread cost and risk limits are already checked by code, and trades here are short scalps lasting minutes to an hour or two on the chart given.
+Answer NO only for a concrete flaw: the target is out of reach for the chart's ATR, the stop is on the wrong side of a clear level, a high-impact event is due within about 90 minutes, news clearly contradicts the direction, or price is already exhausted at the far end of its range. Do not say NO for "momentum is fading", "price is near support" or events many hours away, and do not penalise the idea for the spread-driven stop distance. When the setup is coherent, say YES and give your confidence honestly (0.55 or more).
 You cannot change entry, stop or target. Judge the setup as given.
 
-Before deciding, think about: the strongest case against the trade; whether the stop sits beyond a real level; event risk in the next hours; news that contradicts the score; crowded positioning; whether price is stretched.
-
 Reply with JSON only, no other text:
-{"decision": "YES" or "NO", "confidence": number from 0 to 1, "thesis": "one or two sentences", "against": "the strongest reason not to trade", "invalidation": "what would prove the idea wrong", "main_risk": "one sentence"}"""
+{"decision": "YES" or "NO", "confidence": number from 0 to 1, "thesis": "max 25 words", "against": "max 25 words", "invalidation": "max 20 words", "main_risk": "max 20 words"}
+Keep every field short: a long reply is cut off and counts as NO."""
 
 
 def build_prompt(ctx: dict) -> str:
@@ -21,8 +21,14 @@ def build_prompt(ctx: dict) -> str:
 def decide(ctx: dict, model: str | None = None) -> dict:
     """Returns {decision, confidence, thesis, against, invalidation, main_risk, model, error?}."""
     try:
-        raw = claude_chat(SYSTEM, build_prompt(ctx), model=model, max_tokens=700)
-        obj = extract_json(raw)
+        for attempt in (1, 2):   # a cut-off or malformed reply is retried once before it counts as NO
+            raw = claude_chat(SYSTEM, build_prompt(ctx), model=model, max_tokens=1200)
+            try:
+                obj = extract_json(raw)
+                break
+            except LLMError:
+                if attempt == 2:
+                    raise
         decision = str(obj.get("decision", "")).strip().upper()
         conf = float(obj.get("confidence", 0))
         if decision not in ("YES", "NO") or not (0.0 <= conf <= 1.0):

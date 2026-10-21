@@ -89,7 +89,7 @@ def combine(factors: dict, weights: dict, threshold: float, min_agree: int, min_
     return {"score": round(comp, 2), "agree": agree, "available": len(avail), "bias": bias}
 
 
-def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: float, rr: float, min_spreads: float = 0.0) -> dict:
+def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: float, rr: float, min_spreads: float = 0.0, max_tp_atr: float = 0.0, min_rr: float = 1.5) -> dict:
     """Entry at market, stop beyond a nearby swing when one exists (1 to 2.5 ATR away), else a fixed ATR multiple."""
     a = tech["atr"]
     buy = bias == "BUY"
@@ -107,6 +107,10 @@ def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: floa
     if floor and abs(entry - sl) < floor:   # on fast charts the ATR stop can be thinner than the spread itself
         sl = entry - floor if buy else entry + floor
     stop = abs(entry - sl)
-    tp = entry + rr * stop if buy else entry - rr * stop
+    tp_dist = rr * stop
+    if max_tp_atr and tp_dist > max_tp_atr * a:   # keep the target reachable: no further than max_tp_atr ATRs, but never below min_rr:1
+        tp_dist = max(max_tp_atr * a, min_rr * stop)
+    rr = tp_dist / stop if stop else rr
+    tp = entry + tp_dist if buy else entry - tp_dist
     return {"entry": round(entry, digits), "sl": round(sl, digits), "tp": round(tp, digits),
             "atr": round(a, digits), "stop": round(stop, digits), "rr": round(rr, 2)}
