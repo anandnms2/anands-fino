@@ -62,6 +62,7 @@ class Position(Base):
     entry: Mapped[float] = mapped_column(Float)
     sl: Mapped[float] = mapped_column(Float)
     tp: Mapped[float] = mapped_column(Float)
+    sl0: Mapped[float | None] = mapped_column(Float, nullable=True)  # the first stop, kept once the trailing stop moves sl
     risk_usd: Mapped[float] = mapped_column(Float, default=0.0)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -145,6 +146,8 @@ def init_db():
         for table, default in (("signals", ""), ("positions", "demo")):
             if "venue" not in {c["name"] for c in insp.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN venue VARCHAR(8) NOT NULL DEFAULT '{default}'"))
+        if "sl0" not in {c["name"] for c in insp.get_columns("positions")}:
+            conn.execute(text("ALTER TABLE positions ADD COLUMN sl0 FLOAT"))
         # tickets of different accounts can coincide, so the key of positions becomes (ticket, venue) (Postgres; SQLite is dev only)
         if eng.dialect.name == "postgresql":
             pk = insp.get_pk_constraint("positions")

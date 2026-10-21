@@ -242,3 +242,37 @@ def test_claude_veto_off_skips_claude(monkeypatch):
     # the switch is read at the Claude step; a NO from the stub must not be reached
     assert engine.state()["claude_veto"] is False and not called
     kv_set("claude_veto", False)
+
+
+def test_trailing_stop_locks_profit_then_follows():
+    from types import SimpleNamespace as NS
+    from app.config import Settings
+    from app.engine import _trail_plan
+    cfg = Settings()
+    pos = NS(side="BUY", entry=100.0, sl=99.0, sl0=None, tp=102.0)
+    assert _trail_plan(pos, {"price_current": 100.5, "sl": 99.0, "tp": 102.0}, cfg) is None          # +0.5R: nothing yet
+    sl, tp, _ = _trail_plan(pos, {"price_current": 101.0, "sl": 99.0, "tp": 102.0}, cfg)               # +1R: break-even plus 0.2R
+    assert abs(sl - 100.2) < 1e-9 and tp == 102.0
+    sl, tp, _ = _trail_plan(pos, {"price_current": 101.6, "sl": 100.2, "tp": 102.0}, cfg)               # +1.6R: trails 0.75R behind, target moves ahead
+    assert abs(sl - 100.85) < 1e-9 and abs(tp - 102.6) < 1e-9
+    assert _trail_plan(pos, {"price_current": 101.0, "sl": 100.85, "tp": 102.6}, cfg) is None           # price pulled back: never loosen
+    sell = NS(side="SELL", entry=100.0, sl=101.0, sl0=None, tp=98.0)
+    sl, _, _ = _trail_plan(sell, {"price_current": 98.4, "sl": 101.0, "tp": 98.0}, cfg)
+    assert abs(sl - 99.15) < 1e-9
+
+
+def test_reconcile_moves_stop_on_broker():
+    from app import broker, engine
+    from app.db import Position, session, utcnow
+    mb = broker.get_broker("demo") if hasattr(broker, "get_broker") else None
+    mb.connect()
+    r = mb.send_market("XAUUSD", "BUY", 0.1, 99.0, 102.0, 1, 10)
+    tk = r["order"]
+    with session() as s:
+        s.add(Position(ticket=tk, venue="demo", symbol="XAUUSD", side="BUY", lots=0.1, entry=100.0, sl=99.0, tp=102.0, risk_usd=10, opened_at=utcnow()))
+        s.commit()
+    mb._positions[tk].update(price_current=101.0, price_open=100.0)
+    engine._reconcile_venue("demo", engine.get_settings())
+    assert abs(mb._positions[tk]["sl"] - 100.2) < 1e-6
+    with session() as s:
+        assert abs(s.get(Position, (tk, "demo")).sl - 100.2) < 1e-6

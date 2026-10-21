@@ -331,6 +331,15 @@ class PaperBroker:
             kv_set("paper_state", st)
             return {"retcode": RETCODE_DONE, "order": tk, "deal": tk, "volume": lots, "price": float(price), "comment": "paper"}
 
+    def modify_sltp(self, ticket: int, sl: float, tp: float) -> None:
+        with self._lock:
+            st = self._state()
+            p = st["positions"].get(str(ticket))
+            if p is None:
+                raise BrokerError(f"position {ticket} is not open")
+            p["sl"], p["tp"] = float(sl), float(tp)
+            kv_set("paper_state", st)
+
     def close_position(self, ticket: int, magic: int, deviation: int) -> dict:
         with self._lock:
             st = self._state()

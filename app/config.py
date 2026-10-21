@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
     min_stop_spreads: float = 0.0      # 0 = derived from SPREAD_STOP_LIMIT (stop at least 1.05 / that many spreads)     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
+    trail_on: bool = True              # trailing stop: lock profit as a trade moves in our favour (the dashboard switch overrides)
+    trail_start_r: float = 1.0         # at this many R of profit (R = the first stop distance) the stop moves to break-even plus TRAIL_LOCK_R
+    trail_lock_r: float = 0.2
+    trail_step_r: float = 1.5          # from here the stop follows the price at TRAIL_GAP_R behind it and the target moves TRAIL_TP_R ahead of it
+    trail_gap_r: float = 0.75
+    trail_tp_r: float = 1.0
     profile: str = "fast"              # fast = trade often (looser filters), normal = the stricter values below; the dashboard switch overrides this
     auto_tf: bool = True               # per symbol: climb to a bigger candle when the chosen one moves less than AUTO_TF_ATR_SPREADS spreads
     auto_tf_atr_spreads: float = 3.0

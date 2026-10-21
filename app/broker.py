@@ -171,6 +171,9 @@ class RemoteBroker:
             raise BrokerError(f"order rejected: {res}")
         return res
 
+    def modify_sltp(self, ticket: int, sl: float, tp: float) -> None:
+        raise BrokerError("moving a stop is not supported on this broker")
+
     def close_position(self, ticket: int, magic: int, deviation: int) -> dict:
         pos = next((p for p in self.positions(magic) if p["ticket"] == ticket), None)
         if pos is None:
@@ -266,6 +269,11 @@ class MockBroker:
             "magic": magic, "time": int(time.time()), "identifier": self._ticket}
         self.orders.append({"symbol": symbol, "side": side, "lots": lots, "sl": sl, "tp": tp})
         return {"retcode": RETCODE_DONE, "order": self._ticket, "deal": self._ticket, "volume": lots, "price": price, "comment": "mock"}
+
+    def modify_sltp(self, ticket: int, sl: float, tp: float) -> None:
+        if ticket not in self._positions:
+            raise BrokerError(f"position {ticket} is not open")
+        self._positions[ticket].update(sl=sl, tp=tp)
 
     def close_position(self, ticket: int, magic: int, deviation: int) -> dict:
         p = self._positions.pop(ticket, None)

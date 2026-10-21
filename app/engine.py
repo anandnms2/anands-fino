@@ -1,5 +1,6 @@
 """The trading cycle (one per candle), order execution, reconciliation and the kill switch."""
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -602,6 +603,38 @@ def expire_stale() -> None:
         s.commit()
 
 
+_trail_fail: dict = {}
+
+
+def _trail_plan(pos, lp: dict, cfg: Settings):
+    """(new stop, new target, why) when the trailing stop should move, else None. R is the first stop distance."""
+    if kv_get("trail") is False or (kv_get("trail") is None and not cfg.trail_on):
+        return None
+    buy = pos.side == "BUY"
+    cur_sl = float(lp.get("sl") or pos.sl)
+    r = abs(pos.entry - (pos.sl0 or pos.sl))
+    if r <= 0:
+        return None
+    cur = float(lp["price_current"])
+    gain = ((cur - pos.entry) if buy else (pos.entry - cur)) / r
+    sgn = 1 if buy else -1
+    new_sl, why = None, ""
+    if gain >= cfg.trail_start_r:
+        new_sl, why = pos.entry + sgn * cfg.trail_lock_r * r, f"+{gain:.1f}R, stop moved to lock profit"
+    if gain >= cfg.trail_step_r:
+        trail = cur - sgn * cfg.trail_gap_r * r
+        if new_sl is None or (trail - new_sl) * sgn > 0:
+            new_sl, why = trail, f"+{gain:.1f}R, trailing"
+    if new_sl is None or (new_sl - cur_sl) * sgn < 0.1 * r:
+        return None
+    new_tp = float(lp.get("tp") or pos.tp)
+    if gain >= cfg.trail_step_r:
+        ext = cur + sgn * cfg.trail_tp_r * r
+        if (ext - new_tp) * sgn > 0:
+            new_tp = ext
+    return new_sl, new_tp, why
+
+
 def _reconcile_venue(v: str, cfg: Settings) -> None:
     broker = get_broker(v)
     try:
@@ -610,12 +643,15 @@ def _reconcile_venue(v: str, cfg: Settings) -> None:
         account = broker.account()
     except BrokerError:
         return
-    events, streak_now = [], V.loss_streak(v)
+    events, streak_now, trails = [], V.loss_streak(v), []
     with session() as s:
         for pos in s.scalars(select(Position).where(Position.status == "open", Position.venue == v)).all():
             lp = live.get(pos.ticket)
             if lp:
                 pos.floating, pos.last_price = float(lp["profit"] + lp.get("swap", 0.0)), float(lp["price_current"])
+                plan = _trail_plan(pos, lp, cfg)
+                if plan and time.time() - _trail_fail.get((v, pos.ticket), 0) > 60:
+                    trails.append((pos.ticket, pos.symbol, lp["symbol"], pos.sl0 or pos.sl, *plan))
                 continue
             deals = broker.deals_for_position(pos.ticket)
             out = [d for d in deals if d["entry"] in (1, 2, 3)]
@@ -625,6 +661,22 @@ def _reconcile_venue(v: str, cfg: Settings) -> None:
             streak_now = streak_now + 1 if profit < 0 else 0
             events.append((f"[{V.LABEL[v]}] {pos.symbol} #{pos.ticket} closed at {pos.close_price:g}, result {profit:+.2f}", pos.symbol, pos.signal_id))
         s.commit()
+    # trailing stops: the broker calls happen outside the transaction
+    for ticket, sym, bsym, sl_first, new_sl, new_tp, why in trails:
+        try:
+            d = broker.symbol_info(bsym)["digits"]
+            new_sl, new_tp = round(new_sl, d), round(new_tp, d)
+            broker.modify_sltp(ticket, new_sl, new_tp)
+        except BrokerError as e:
+            _trail_fail[(v, ticket)] = time.time()
+            log(f"[{V.LABEL[v]}] {sym} #{ticket}: trailing stop could not be moved ({e}); retrying in a minute", "warn", sym)
+            continue
+        with session() as s:
+            row = s.get(Position, (ticket, v))
+            if row is not None:
+                row.sl0, row.sl, row.tp = sl_first, new_sl, new_tp
+                s.commit()
+        log(f"[{V.LABEL[v]}] {sym} #{ticket}: {why}, stop now {new_sl:g}, target {new_tp:g}", "trade", sym)
     # write to the journal only after the transaction above is closed
     if events:
         V.set_loss_streak(v, streak_now)
@@ -696,6 +748,7 @@ def state() -> dict:
                   "freellm_url": bool(cfg.freellmapi_base_url)},
         "events": collectors.upcoming_events(),
         "symbols": cfg.symbol_list, "symbols_custom": bool(kv_get("symbols")), "symbols_default": [s.strip().upper() for s in cfg.symbols.split(",") if s.strip()],
+        "trail": (kv_get("trail") is True) or (kv_get("trail") is None and cfg.trail_on),
         "claude_veto": kv_get("claude_veto") is True,
         "profile": __import__("app.config", fromlist=["x"]).profile_name(),
         "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},

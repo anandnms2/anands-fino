@@ -290,6 +290,14 @@ def api_profile(body: dict = Body(...)):
     return {"profile": profile_name()}
 
 
+@app.post("/api/trail")
+def api_trail(body: dict = Body(...)):
+    on = bool(body.get("on"))
+    kv_set("trail", on)
+    log("Trailing stop " + ("ON: profit is locked as trades move our way" if on else "OFF: stops stay where they were set"), "info")
+    return {"trail": on}
+
+
 @app.post("/api/claude-veto")
 def api_claude_veto(body: dict = Body(...)):
     on = bool(body.get("on"))

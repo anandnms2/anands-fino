@@ -147,6 +147,8 @@ async function desk() {
   html += `<section class="card"><div class="hd"><h2>Trading profile</h2><span class="mono mute">${st.profile === "fast" ? "fast" : "normal"}</span></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Fast: score ±20, 50% of factors agree, Claude re-asked after 5 min, up to 5 open trades. Normal: score ±35, 60%, 15 min, 3 open. Loss limits, news blackout, spread checks and Claude's YES/NO apply in both.</div>
     <button class="btn sm" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn sm" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button>
+    <div class="mute" style="margin:12px 0 8px">Trailing stop: <strong>${st.trail ? "ON" : "OFF"}</strong> (at +1R stop to break-even +0.2R, from +1.5R it follows 0.75R behind and the target moves ahead)</div>
+    <button class="btn sm" onclick="act('/api/trail',{on:${!st.trail}},'Trailing stop ${st.trail ? "off" : "on"}')">Turn trailing ${st.trail ? "off" : "on"}</button>
     <div class="mute" style="margin:12px 0 8px">Claude's veto: <strong>${st.claude_veto ? "ON (Claude can say no)" : "OFF (Claude is not asked)"}</strong></div>
     <button class="btn sm" onclick="act('/api/claude-veto',{on:${!st.claude_veto}},'Claude veto ${st.claude_veto ? "off" : "on"}')">Turn veto ${st.claude_veto ? "off" : "on"}</button></div></section>`;
 

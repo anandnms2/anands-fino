@@ -640,6 +640,9 @@ class CTraderBroker:
         if result != "ok":
             raise BrokerError(result if result != "timeout" else "no confirmation from cTrader")
 
+    def modify_sltp(self, ticket: int, sl: float, tp: float) -> None:
+        self._set_protection(int(ticket), sl, tp)
+
     def close_position(self, ticket: int, magic: int, deviation: int) -> dict:
         pos = next((p for p in self.positions(magic) if p["ticket"] == ticket), None)
         if pos is None:
