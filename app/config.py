@@ -18,7 +18,6 @@ DEFAULT_FEEDS = [
     "https://www.federalreserve.gov/feeds/press_all.xml",
     "https://www.ecb.europa.eu/rss/press.html",
     "https://www.bankofengland.co.uk/rss/news",
-    "https://www.fxstreet.com/rss/news",
 ]
 
 # Symbols that move together. The gate allows one open trade per group and direction.
