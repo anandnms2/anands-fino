@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     if cfg.scheduler_enabled:
         # every minute; each venue only trades when a candle of its own timeframe has just closed
         scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute="*", second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
-        scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=30, max_instances=1, coalesce=True)
+        scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("news", refresh_news), "interval", minutes=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("calendar", collectors.fetch_calendar), "interval", minutes=60, max_instances=1, coalesce=True)
         scheduler.add_job(job("macro", collectors.fetch_macro), "interval", hours=6, max_instances=1, coalesce=True)

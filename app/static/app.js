@@ -311,4 +311,4 @@ async function render() {
 }
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 render();
-timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports" && location.hash !== "#/specs") render(); }, 10000);
+timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports" && location.hash !== "#/specs") render(); }, 5000);
