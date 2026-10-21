@@ -55,8 +55,8 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
         f"needs ATR of at least {cfg.min_atr_to_spread:g}x the spread")
     add(f"Stop {stop / atr:.1f} ATR wide, limit {cfg.max_stop_atr:g}" if atr else "Stop width vs ATR", (not atr) or stop <= cfg.max_stop_atr * atr,
         "the spread forces a stop too wide for this chart, so the target is out of reach" if atr and stop > cfg.max_stop_atr * atr else "")
-    spread_ok = stop > 0 and spread_price <= cfg.max_spread_to_stop * stop
-    add(f"Spread {spread_price:g}, limit {cfg.max_spread_to_stop * stop:g}", spread_ok)
+    spread_ok = stop > 0 and spread_price <= cfg.spread_stop_limit * stop
+    add(f"Spread {spread_price:g}, limit {cfg.spread_stop_limit * stop:g}", spread_ok)
 
     # position size from the risk budget, rounded DOWN to the broker's lot step
     lots, risk_usd = 0.0, 0.0

@@ -230,7 +230,7 @@ def test_symbols_editable_from_dashboard(monkeypatch):
 
 def test_same_gate_block_is_not_journaled_every_minute(monkeypatch):
     force_buy(monkeypatch); yes(monkeypatch)
-    monkeypatch.setenv("MAX_SPREAD_TO_STOP", "0.0000001")   # every trade fails the spread check
+    monkeypatch.setenv("SPREAD_STOP_LIMIT", "0.0000001")   # every trade fails the spread check
     from app.config import get_settings
     get_settings.cache_clear()
     engine.run_cycle(force=True)

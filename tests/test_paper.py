@@ -219,5 +219,5 @@ def test_auto_chart_climbs_when_candles_are_too_quiet(monkeypatch):
     get_settings.cache_clear()
     assert V.TIMEFRAMES[V.TIMEFRAMES.index(3) + 1] == 5
     cfg = get_settings()
-    assert cfg.auto_tf and cfg.auto_tf_max == 15 and cfg.max_spread_to_stop == 0.25
+    assert cfg.auto_tf and cfg.auto_tf_max == 15 and cfg.spread_stop_limit == 0.25
     get_settings.cache_clear()
