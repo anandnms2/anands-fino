@@ -1,5 +1,6 @@
 """The trading cycle (one per candle), order execution, reconciliation and the kill switch."""
 import threading
+import math
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -587,6 +588,107 @@ def close_position(ticket: int, venue: str = "demo") -> None:
     broker.close_position(ticket, cfg.magic, cfg.deviation)
     log(f"Close sent for #{ticket} ({V.LABEL[venue]})", "trade")
     reconcile()
+
+
+# ---------------------------------------------------------------- manual trades
+def _lot_math(cfg: Settings, broker, info: dict, account: dict, entry: float, sl: float) -> dict:
+    """Value of one price unit per lot in account currency, the lots the risk budget buys, and the loss one lot would take at the stop."""
+    same = info.get("currency_profit") == account.get("currency")
+    rate = 1.0 if same else profit_rate(broker, info, account)
+    pv = info["trade_contract_size"] * (rate or 0.0)
+    stop = abs(entry - sl)
+    step = info["volume_step"] or 0.01
+    lots = 0.0
+    if pv > 0 and stop > 0:
+        raw = account["balance"] * cfg.risk_per_trade_pct / 100 / (stop * pv)
+        lots = round(min(math.floor(raw / step + 1e-9) * step, info["volume_max"]), 8)
+    return {"pv": pv, "lots": lots, "step": step, "min": info["volume_min"], "max": info["volume_max"], "rate_ok": bool(rate)}
+
+
+def manual_ticket(venue: str, symbol: str, side: str) -> dict:
+    """What the order ticket starts from: live price, a stop and target on the current chart, the lots the risk budget buys."""
+    cfg = get_settings()
+    if venue not in V.VENUES or symbol not in cfg.symbol_list or side not in ("BUY", "SELL"):
+        raise ValueError("unknown venue, symbol or side")
+    broker = get_broker(venue)
+    broker.connect()
+    bsym = cfg.broker_symbol(symbol)
+    info, tick, account = broker.symbol_info(bsym), broker.tick(bsym), broker.account()
+    tech, tf, _ = _tech_ladder(cfg, broker, bsym, info, tick, V.venue_tf(venue))
+    lv = scoring.build_levels(side, tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
+    m = _lot_math(cfg, broker, info, account, lv["entry"], lv["sl"])
+    return {"venue": venue, "symbol": symbol, "side": side, "bid": tick["bid"], "ask": tick["ask"], "digits": info["digits"], "tf": tf,
+            "entry": lv["entry"], "sl": lv["sl"], "tp": lv["tp"], "atr": lv["atr"], **m, "balance": account["balance"], "currency": account["currency"],
+            "risk_pct": cfg.risk_per_trade_pct, "day_cap_pct": cfg.daily_loss_cap_pct, "live": venue == "live"}
+
+
+def manual_trade(venue: str, symbol: str, side: str, lots: float, sl: float, tp: float, confirm_live: bool = False) -> dict:
+    """A trade the user opened by hand. Scoring and Claude are skipped (it is the user's call); the hard limits are not: halts, the Live lock,
+    a real stop on the right side, broker lot limits, and no single trade may risk more than the daily loss limit."""
+    cfg = get_settings()
+    if venue not in V.VENUES or symbol not in cfg.symbol_list or side not in ("BUY", "SELL"):
+        raise ValueError("unknown venue, symbol or side")
+    if V.locked(venue):
+        raise ValueError(f"{V.LABEL[venue]} is locked")
+    if venue == "live" and not confirm_live:
+        raise ValueError("Live orders need the confirmation box ticked")
+    if halted()["on"] or V.venue_halt(venue)["on"]:
+        raise ValueError("trading is halted or this venue is paused")
+    broker = get_broker(venue)
+    try:
+        broker.connect()
+        account = broker.account()
+        bsym = cfg.broker_symbol(symbol)
+        info, tick = broker.symbol_info(bsym), broker.tick(bsym)
+    except BrokerError as e:
+        raise ValueError(f"broker unavailable: {e}") from e
+    real = not account_is_demo(account)
+    if venue == "live" and not V.allow_live():
+        raise ValueError("live trading is not enabled (ALLOW_LIVE)")
+    if venue == "live" and not real:
+        raise ValueError("the Live venue is connected to a DEMO account")
+    if venue != "live" and real:
+        raise ValueError(f"the connected account is a REAL account but this is the {V.LABEL[venue]} venue")
+    buy = side == "BUY"
+    entry = tick["ask"] if buy else tick["bid"]
+    if not ((sl < entry) if buy else (sl > entry)):
+        raise ValueError("the stop must be " + ("below" if buy else "above") + " the entry price")
+    if tp and not ((tp > entry) if buy else (tp < entry)):
+        raise ValueError("the target must be " + ("above" if buy else "below") + " the entry price")
+    m = _lot_math(cfg, broker, info, account, entry, sl)
+    if not m["rate_ok"] or m["pv"] <= 0:
+        raise ValueError(f"no rate to convert {info.get('currency_profit')} to {account.get('currency')}")
+    step = m["step"]
+    lots = round(round(lots / step) * step, 8) if lots else m["lots"]
+    if lots < m["min"] or lots > m["max"]:
+        raise ValueError(f"lots must be between {m['min']:g} and {m['max']:g}")
+    risk_usd = lots * abs(entry - sl) * m["pv"]
+    cap = account["balance"] * cfg.daily_loss_cap_pct / 100
+    if risk_usd > cap + 1e-9:
+        raise ValueError(f"this trade risks {risk_usd:,.2f}, more than the daily loss limit ({cap:,.2f}); use fewer lots or a closer stop")
+    start_eq = V.day_start_equity(venue, account)
+    if start_eq and (account["equity"] - start_eq) / start_eq * 100 <= -cfg.daily_loss_cap_pct:
+        raise ValueError("the daily loss limit is already reached")
+    try:
+        res = broker.send_market(bsym, side, lots, sl, tp or 0.0, cfg.magic, cfg.deviation)
+    except BrokerError as e:
+        raise ValueError(str(e)) from e
+    ticket, fill = int(res["order"]), float(res.get("price") or entry)
+    d = info["digits"]
+    atr = round(abs(entry - sl), d)
+    with session() as s:
+        sig = Signal(cycle_id="manual", symbol=symbol, timeframe=tf_label(V.venue_tf(venue)), bias=side, status="executed", mode="manual:manual", venue=venue,
+                     levels={"entry": round(entry, d), "sl": sl, "tp": tp, "atr": atr, "stop": atr, "rr": round(abs(tp - entry) / atr, 2) if tp and atr else 0},
+                     lots=lots, ticket=ticket, reason=f"Opened by hand at {fill:g} ({V.LABEL[venue]})", claude={}, gate={"ok": True, "checks": []})
+        s.add(sig)
+        s.commit()
+        s.add(Position(ticket=ticket, signal_id=sig.id, symbol=symbol, side=side, lots=lots, entry=fill, sl=sl, tp=tp or 0.0, risk_usd=risk_usd, last_price=fill, venue=venue))
+        s.commit()
+        sid = sig.id
+    msg = f"[{V.LABEL[venue]}] MANUAL {symbol} {side} {lots:g} lots filled at {fill:g}, stop {sl:g}, target {tp:g} (#{ticket})"
+    log("Order filled: " + msg, "trade", symbol, sid)
+    notify("Order filled: " + msg)
+    return {"ticket": ticket, "price": fill, "lots": lots, "risk_usd": round(risk_usd, 2)}
 
 
 # ---------------------------------------------------------------- reversal watch

@@ -262,3 +262,22 @@ svg text { font-family: var(--font-mono); }
 .tin input { width: 96px; text-align: right; background: var(--panel2, #1c1c20); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
 .tin input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .trow.mine .tin input { border-color: var(--accent); }
+
+.buysell { display: flex; gap: 6px; margin-left: 8px; }
+.bs { border: 1px solid var(--line); background: transparent; border-radius: 6px; padding: 6px 16px; font: 700 12px var(--font-body); letter-spacing: .06em; cursor: pointer; color: var(--fg); }
+.bs.buy { border-color: #1f6b4d; color: var(--buy); } .bs.buy:hover, .bs.buy.on { background: var(--buy); color: #0b0b0d; border-color: var(--buy); }
+.bs.sell { border-color: #6b2a2a; color: var(--sell); } .bs.sell:hover, .bs.sell.on { background: var(--sell); color: #0b0b0d; border-color: var(--sell); }
+.tk-ov { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
+.tk { width: min(440px, 100%); max-height: 100%; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.tk-h { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); } .tk-h .btn { margin-left: auto; }
+.tk-b { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+.tk-b label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--mute); }
+.tk-b select, .tk-b input[type=number] { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: 14px var(--font-mono); }
+.tk-side { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .tk-side .bs { padding: 10px; font-size: 13px; }
+.tk-g { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.tk-px { font-size: 13px; } .tk-px b { font-size: 18px; }
+.tk-calc { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--mute); } .tk-calc b { color: var(--fg); }
+.tk-warn { min-height: 16px; font-size: 12px; color: var(--sell); }
+.tk-chk { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--warn) !important; }
+.tk-f { display: flex; justify-content: space-between; gap: 10px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
+.tk-g input, .tk-b select { min-width: 0; width: 100%; box-sizing: border-box; }

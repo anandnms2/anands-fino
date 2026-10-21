@@ -81,9 +81,9 @@ function startStream() {
 
 function syncStream() { if (S.es && S.esSym !== S.sym && S.sym) { S.es.close(); S.es = null; startStream(); } }
 function onTick() {
-  barLive();
+  barLive(); if (T) tkCalc();
   if (pageName() !== "terminal" || !S.mounted || !S.st) return;
-  updateWatch(); updateHead(); updateLiveCandle(); updateLivePos(); queueDraw();
+  updateWatch(); updateHead(); updateLiveCandle(); updateLivePos(); queueDraw(); tkCalc();
 }
 
 /* ------------------------------------------------------------ top bar */
@@ -193,6 +193,7 @@ window.pickSym = (s) => { S.sym = s; syncStream(); localStorage.setItem("fs", s)
 function renderHead() {
   const st = S.st, v = st.venues[S.venue] || {};
   $("chead").innerHTML = `<div class="ch-l"><b class="sym">${esc(S.sym)}</b><span class="mono big" id="hb">–</span><span class="mono mute" id="hs"></span></div>
+    <div class="buysell"><button class="bs buy" onclick="openTicket('BUY')">BUY</button><button class="bs sell" onclick="openTicket('SELL')">SELL</button></div>
     <div class="tfs" role="group" aria-label="Chart candle size">${st.timeframes.map((m) => `<button aria-pressed="${m === S.tf}" onclick="pickTf(${m})">${m === 60 ? "1h" : m + "m"}</button>`).join("")}</div>`;
   updateHead();
 }
@@ -369,6 +370,62 @@ function updateLivePos() {
     f.style.left = Math.min(pe, pn) + "%"; f.style.width = Math.abs(pn - pe) + "%"; f.style.background = (row.dataset.side === "BUY" ? L.live >= e : L.live <= e) ? "var(--buy)" : "var(--sell)"; n.style.left = "calc(" + pn + "% - 1px)";
   });
 }
+
+
+/* ------------------------------------------------------------ manual order ticket */
+let T = null;
+window.openTicket = (side) => { T = { side, sym: S.sym, venue: S.venue, busy: true, err: "", live: S.venue === "live" }; renderTicket(); loadTicket(); };
+window.closeTicket = () => { T = null; const el = $("tkt"); if (el) el.remove(); };
+async function loadTicket() {
+  if (!T) return; const mine = T; mine.busy = true; mine.err = ""; renderTicket();
+  try { const d = await api(`/api/trade/ticket?venue=${mine.venue}&symbol=${mine.sym}&side=${mine.side}`); if (T !== mine) return; Object.assign(mine, d, { lotsIn: d.lots, slIn: d.sl, tpIn: d.tp }); }
+  catch (e) { if (T === mine) mine.err = e.message; }
+  mine.busy = false; renderTicket();
+}
+window.tkSide = (side) => { if (!T || T.side === side) return; T.side = side; loadTicket(); };
+window.tkSym = (sym) => { if (!T) return; T.sym = sym; loadTicket(); };
+window.tkAuto = () => { if (!T) return; T.lotsIn = T.lots; T.slIn = T.sl; T.tpIn = T.tp; renderTicket(); };
+function tkVals() { const g = (id) => Number(($(id) || {}).value); return { lots: g("tk-lots"), sl: g("tk-sl"), tp: g("tk-tp") }; }
+function tkCalc() {
+  if (!T || T.busy || !T.pv) return;
+  const px = (S.px[T.venue] || {})[T.sym], buy = T.side === "BUY", entry = px ? (buy ? px[1] : px[0]) : (buy ? T.ask : T.bid), v = tkVals();
+  const stop = Math.abs(entry - v.sl), risk = v.lots * stop * T.pv, rr = stop && v.tp ? Math.abs(v.tp - entry) / stop : 0, pct = T.balance ? (risk / T.balance) * 100 : 0;
+  const okSide = buy ? v.sl < entry && (!v.tp || v.tp > entry) : v.sl > entry && (!v.tp || v.tp < entry), over = pct > T.day_cap_pct;
+  const f = (n, d) => (isFinite(n) ? n.toFixed(d) : "–");
+  $("tk-entry").textContent = f(entry, T.digits);
+  $("tk-calc").innerHTML = `<span>Risk <b class="mono ${over ? "bad" : ""}">${money(risk)} (${f(pct, 2)}%)</b></span><span>Reward : risk <b class="mono">${f(rr, 2)}</b></span><span>Stop <b class="mono">${f(stop, T.digits)}</b></span>`;
+  $("tk-warn").textContent = !okSide ? "Stop and target must be on opposite sides of the price: stop " + (buy ? "below" : "above") + ", target " + (buy ? "above" : "below") + "." : over ? "This risks more than the daily loss limit (" + T.day_cap_pct + "%). The order will be refused." : v.lots < T.min || v.lots > T.max ? "Lots must be between " + T.min + " and " + T.max + "." : "";
+  $("tk-go").disabled = !!$("tk-warn").textContent || T.sending;
+}
+function renderTicket() {
+  if (!T) return;
+  let el = $("tkt"); if (!el) { el = document.createElement("div"); el.id = "tkt"; el.className = "tk-ov"; el.onclick = (e) => { if (e.target === el) closeTicket(); }; document.body.appendChild(el); }
+  const buy = T.side === "BUY", dg = T.digits || 5, st = S.st;
+  el.innerHTML = `<div class="tk" role="dialog" aria-modal="true" aria-label="New trade"><div class="tk-h"><b>New trade</b><span class="pill ${T.venue === "live" ? "warn" : "acc"}">${esc(VLABEL[T.venue])}</span><button class="btn sm" onclick="closeTicket()" aria-label="Close">✕</button></div>
+    <div class="tk-b"><label>Instrument<select id="tk-sym" onchange="tkSym(this.value)">${st.symbols.map((x) => `<option ${x === T.sym ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+    <div class="tk-side"><button class="bs buy ${buy ? "on" : ""}" onclick="tkSide('BUY')">BUY</button><button class="bs sell ${buy ? "" : "on"}" onclick="tkSide('SELL')">SELL</button></div>
+    ${T.err ? `<div class="banner warn" style="margin:8px 0"><span>${esc(T.err)}</span></div>` : ""}
+    ${T.busy ? '<div class="mute" style="padding:18px 0">Reading the market…</div>' : T.pv ? `
+    <div class="tk-px">Fills at <b class="mono" id="tk-entry">–</b> <span class="mute">· ${esc(T.tf ? tfName(T.tf) : "")} chart · ATR ${esc(T.atr)}</span></div>
+    <div class="tk-g"><label>Lots<input id="tk-lots" type="number" step="${T.step}" min="${T.min}" max="${T.max}" value="${T.lotsIn}" oninput="tkCalc()"></label>
+      <label>Stop loss<input id="tk-sl" type="number" step="any" value="${T.slIn}" oninput="tkCalc()"></label>
+      <label>Target<input id="tk-tp" type="number" step="any" value="${T.tpIn}" oninput="tkCalc()"></label></div>
+    <div class="tk-calc" id="tk-calc"></div><div class="tk-warn" id="tk-warn" role="alert"></div>
+    <div class="mute" style="font-size:12px">Start values come from the current chart and your risk per trade (${T.risk_pct}%). Change any of them. A manual trade skips the score and Claude, but not the halt switches, the Live lock or the daily loss limit. Trailing stop and reversal watch manage it afterwards like any other trade.</div>
+    ${T.venue === "live" ? '<label class="tk-chk"><input id="tk-live" type="checkbox" onchange="tkCalc()"> This is a REAL-money order on the Live account</label>' : ""}` : ""}</div>
+    <div class="tk-f"><button class="btn sm" onclick="tkAuto()" ${T.busy || !T.pv ? "disabled" : ""}>Reset to suggested</button><button class="btn pri" id="tk-go" onclick="tkSend()" ${T.busy || !T.pv ? "disabled" : ""}>${buy ? "Buy" : "Sell"} ${esc(T.sym)}</button></div></div>`;
+  tkCalc();
+}
+const tfName = (m) => (m >= 60 ? m / 60 + "h" : m + "m");
+window.tkSend = async () => {
+  if (!T || T.sending) return; const v = tkVals(), live = T.venue === "live";
+  if (live && !($("tk-live") || {}).checked) { $("tk-warn").textContent = "Tick the box to confirm a real-money order."; return; }
+  if (!confirm(`${T.side} ${v.lots} lots ${T.sym} on ${VLABEL[T.venue]}\nstop ${v.sl}, target ${v.tp || "none"}${live ? "\n\nREAL MONEY." : ""}`)) return;
+  T.sending = true; $("tk-go").disabled = true;
+  try { const r = await api("/api/trade", "POST", { venue: T.venue, symbol: T.sym, side: T.side, lots: v.lots, sl: v.sl, tp: v.tp, confirm_live: live }); toast(`Opened ${T.sym} ${T.side} ${r.lots} lots at ${r.price}`); closeTicket(); render(); }
+  catch (e) { if (T) { T.sending = false; $("tk-warn").textContent = e.message; $("tk-go").disabled = false; } }
+};
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && T) closeTicket(); });
 
 /* ------------------------------------------------------------ settings */
 const swBtn = (on, label, path, body, confirmMsg) => `<button class="tg ${on ? "on" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" onclick="${confirmMsg ? `if(!confirm('${confirmMsg}'))return;` : ""}act('${path}',${body},'${esc(label)} ${on ? "off" : "on"}')"><i></i></button>`;

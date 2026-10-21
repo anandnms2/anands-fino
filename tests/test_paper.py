@@ -401,3 +401,31 @@ def test_every_rule_is_tunable_and_weights_flow_through():
     main.api_tune({"clear": ["w_trend"]})
     assert get_settings().weights_dict["trend"] == 25
     main.api_tune({"reset": True})
+
+
+def test_manual_trade_opens_checks_limits_and_books_a_position():
+    import pytest
+    from app import broker, engine, venues
+    from app.db import Position, Signal, session
+    from sqlalchemy import select
+
+    venues.set_venue("demo", on=True)
+    tk = broker.get_broker("demo").tick("XAUUSD")
+    t = engine.manual_ticket("demo", "XAUUSD", "BUY")
+    assert t["sl"] < t["entry"] < t["tp"] and t["lots"] > 0 and t["pv"] > 0
+    with pytest.raises(ValueError, match="stop must be below"):
+        engine.manual_trade("demo", "XAUUSD", "BUY", 0.1, tk["ask"] + 1, tk["ask"] + 5)
+    with pytest.raises(ValueError, match="daily loss limit"):
+        engine.manual_trade("demo", "XAUUSD", "BUY", 50, t["sl"], t["tp"])        # far too big for the account
+    with pytest.raises(ValueError, match="locked"):
+        engine.manual_trade("live", "XAUUSD", "BUY", 0.1, t["sl"], t["tp"])
+    with pytest.raises(ValueError):
+        engine.manual_trade("demo", "NOPE", "BUY", 0.1, t["sl"], t["tp"])
+    r = engine.manual_trade("demo", "XAUUSD", "BUY", t["lots"], t["sl"], t["tp"])
+    with session() as s:
+        p = s.scalars(select(Position).where(Position.ticket == r["ticket"])).one()
+        sig = s.get(Signal, p.signal_id)
+    assert p.status == "open" and p.venue == "demo" and sig.mode == "manual:manual" and p.risk_usd > 0
+    engine.halt("test")
+    with pytest.raises(ValueError, match="halted"):
+        engine.manual_trade("demo", "EURUSD", "SELL", 0.1, 9.0, 0.0)

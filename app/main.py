@@ -597,6 +597,27 @@ def api_reject(sid: int):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/trade/ticket")
+def api_trade_ticket(venue: str, symbol: str, side: str = "BUY"):
+    """Starting values for the manual order ticket."""
+    try:
+        return engine.manual_ticket(venue, symbol.upper(), side.upper())
+    except (ValueError, BrokerError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/trade")
+def api_trade(body: dict = Body(...)):
+    """Open a trade by hand on any traded symbol."""
+    try:
+        return engine.manual_trade(str(body.get("venue", "")), str(body.get("symbol", "")).upper(), str(body.get("side", "")).upper(),
+                                   float(body.get("lots") or 0), float(body["sl"]), float(body.get("tp") or 0), bool(body.get("confirm_live")))
+    except (KeyError, TypeError):
+        raise HTTPException(400, "stop loss is required and every value must be a number")
+    except (ValueError, BrokerError) as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/close/{venue}/{ticket}")
 def api_close(venue: str, ticket: int):
     if venue not in venues.VENUES:
