@@ -92,7 +92,7 @@ def test_stop_never_thinner_than_twelve_spreads():
     from app.scoring import build_levels
     tech = {"atr": 0.00009, "swing_lows": [], "swing_highs": []}
     tick = {"bid": 1.16500, "ask": 1.16512}
-    lv = build_levels("BUY", tech, tick, 5, 1.5, 2.0, 12.0)
-    assert lv["stop"] >= 12 * 0.00012 - 1e-9
+    lv = build_levels("BUY", tech, tick, 5, 1.5, 2.0, 10.5)
+    assert lv["stop"] >= 10.5 * 0.00012 - 1e-9
     assert 0.00012 <= 0.1 * lv["stop"] + 1e-9   # now the 10% spread rule can pass
     assert build_levels("BUY", tech, tick, 5, 1.5, 2.0)["stop"] < 0.0002  # without the floor it was a hair

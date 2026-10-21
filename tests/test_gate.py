@@ -68,3 +68,10 @@ def test_symbol_in_two_correlation_groups():
     assert not run(symbol="USDCAD", open_positions=[{"symbol": "USDJPY", "side": "BUY", "risk_usd": 50.0}])["ok"]  # both long the dollar
     assert any(c["ok"] for c in run(symbol="USDCAD", open_positions=[{"symbol": "USDJPY", "side": "SELL", "risk_usd": 50.0}])["checks"]
                if c["name"].startswith("No correlated"))
+
+
+def test_stop_too_wide_for_the_chart_is_blocked():
+    lv = {"entry": 4100.0, "sl": 4090.0, "tp": 4120.0, "atr": 2.0}   # stop 10 = 5 ATR
+    r = run(levels=lv, spread_price=0.18)
+    assert not r["ok"] and "ATR wide" in r["reason"]
+    assert run(levels={**lv, "atr": 4.0}, spread_price=0.18)["ok"]     # 2.5 ATR is fine

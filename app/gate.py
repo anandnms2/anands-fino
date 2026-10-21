@@ -53,6 +53,8 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
     atr = levels.get("atr") or 0.0
     add(f"Market moving: ATR {atr:g} vs spread {spread_price:g}", not atr or spread_price <= 0 or atr >= cfg.min_atr_to_spread * spread_price,
         f"needs ATR of at least {cfg.min_atr_to_spread:g}x the spread")
+    add(f"Stop {stop / atr:.1f} ATR wide, limit {cfg.max_stop_atr:g}" if atr else "Stop width vs ATR", (not atr) or stop <= cfg.max_stop_atr * atr,
+        "the spread forces a stop too wide for this chart, so the target is out of reach" if atr and stop > cfg.max_stop_atr * atr else "")
     spread_ok = stop > 0 and spread_price <= cfg.max_spread_to_stop * stop
     add(f"Spread {spread_price:g}, limit {cfg.max_spread_to_stop * stop:g}", spread_ok)
 
