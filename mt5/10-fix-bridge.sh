@@ -46,7 +46,7 @@ fi
 (
   sleep 90
   {
-    echo "[watch-mt5] processes: $(pgrep -a -f 'terminal64|wineserver|server.py' | cut -c1-120 | tr '\n' ';')"
+    echo "[watch-mt5] wine: $(/opt/wine-stable/bin/wine --version 2>/dev/null)"; echo "[watch-mt5] processes: $(pgrep -a -f 'terminal64|wineserver|server.py' | cut -c1-120 | tr '\n' ';')"
     if pgrep -f terminal64.exe >/dev/null 2>&1; then
       echo "[watch-mt5] terminal64.exe is running"
     else
