@@ -241,4 +241,4 @@ def test_claude_veto_off_skips_claude(monkeypatch):
     monkeypatch.setattr(engine, "decide", lambda ctx: called.append(1) or {"decision": "NO", "confidence": 0.0})
     # the switch is read at the Claude step; a NO from the stub must not be reached
     assert engine.state()["claude_veto"] is False and not called
-    kv_set("claude_veto", True)
+    kv_set("claude_veto", False)

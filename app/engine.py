@@ -376,7 +376,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         ctx = _claude_context(sym, comb, factors, levels, tech, closes[sym], news24, cb_items, macro, cot, vctx[v0]["positions"],
                               vctx[v0]["account"], vctx[v0]["start_eq"], info, tf_label(tf))
         claude_input = {k: v for k, v in ctx.items() if k != "recent_closes"}
-        if kv_get("claude_veto") is False:   # the dashboard switch: Claude no longer has a veto, trades follow the score and the gate
+        if kv_get("claude_veto") is not True:   # the dashboard switch: Claude no longer has a veto, trades follow the score and the gate
             dec = {"decision": "YES", "confidence": 1.0, "thesis": "Claude veto is off: not asked", "against": "", "invalidation": "", "main_risk": "", "model": "none"}
         else:
             dec = decide(ctx)
@@ -696,7 +696,7 @@ def state() -> dict:
                   "freellm_url": bool(cfg.freellmapi_base_url)},
         "events": collectors.upcoming_events(),
         "symbols": cfg.symbol_list, "symbols_custom": bool(kv_get("symbols")), "symbols_default": [s.strip().upper() for s in cfg.symbols.split(",") if s.strip()],
-        "claude_veto": kv_get("claude_veto") is not False,
+        "claude_veto": kv_get("claude_veto") is True,
         "profile": __import__("app.config", fromlist=["x"]).profile_name(),
         "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},
     }
