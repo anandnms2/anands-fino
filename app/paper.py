@@ -26,6 +26,47 @@ CONTRACT = {"XAUUSD": 100.0, "XAGUSD": 5000.0}
 DIGITS = {"XAUUSD": 2, "XAGUSD": 3}
 
 
+def default_spec(symbol: str) -> dict:
+    """What the paper account assumes for a symbol until you change it: units per lot, price digits, spread and lot limits."""
+    s = symbol.upper()
+    try:
+        env = json.loads(get_settings().paper_spreads or "{}")
+    except ValueError:
+        env = {}
+    return {"contract": CONTRACT.get(s, 100000.0), "digits": DIGITS.get(s, 3 if s.endswith("JPY") else 5),
+            "spread": float(env.get(s, DEFAULT_SPREAD.get(s, 0.00010))), "volume_min": 0.01, "volume_step": 0.01, "volume_max": 50.0}
+
+
+def paper_spec(symbol: str) -> dict:
+    """Defaults, overridden by whatever was saved for this symbol on the dashboard."""
+    s = symbol.upper()
+    return {**default_spec(s), **((kv_get("paper_specs") or {}).get(s) or {})}
+
+
+SPEC_LIMITS = {"contract": (0.0001, 1e9), "digits": (0, 8), "spread": (0.0, 1e6), "volume_min": (0.0001, 1e4), "volume_step": (0.0001, 1e4), "volume_max": (0.0001, 1e6)}
+
+
+def save_paper_spec(symbol: str, values: dict) -> dict:
+    s = symbol.upper()
+    clean = {}
+    for k, (lo, hi) in SPEC_LIMITS.items():
+        if k in values and values[k] not in (None, ""):
+            v = float(values[k])
+            if not lo <= v <= hi:
+                raise ValueError(f"{k} must be between {lo:g} and {hi:g}")
+            clean[k] = int(v) if k == "digits" else v
+    allv = dict(kv_get("paper_specs") or {})
+    allv[s] = {**(allv.get(s) or {}), **clean}
+    kv_set("paper_specs", allv)
+    return paper_spec(s)
+
+
+def reset_paper_spec(symbol: str) -> None:
+    allv = dict(kv_get("paper_specs") or {})
+    allv.pop(symbol.upper(), None)
+    kv_set("paper_specs", allv)
+
+
 def resample(df: pd.DataFrame, tf_min: int) -> pd.DataFrame:
     """Aggregate 1-minute candles (columns time[s], open, high, low, close, tick_volume) into tf_min candles."""
     if tf_min <= 1:
@@ -126,11 +167,7 @@ class PaperBroker:
             return df
 
     def _spread(self, symbol: str) -> float:
-        try:
-            custom = json.loads(get_settings().paper_spreads or "{}")
-        except ValueError:
-            custom = {}
-        return float(custom.get(symbol, DEFAULT_SPREAD.get(symbol, 0.00010)))
+        return float(paper_spec(symbol)["spread"])
 
     # ---- state ----
     def _state(self) -> dict:
@@ -158,9 +195,10 @@ class PaperBroker:
         s = symbol.upper()
         if len(s) < 6 or not s.isalpha():
             raise BrokerError(f"unknown symbol {symbol}")
-        digits = DIGITS.get(s, 3 if s.endswith("JPY") else 5)
-        return {"digits": digits, "point": 10.0 ** -digits, "spread": 0, "trade_contract_size": CONTRACT.get(s, 100000.0),
-                "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01, "currency_profit": s[3:6], "currency_base": s[:3],
+        sp = paper_spec(s)
+        digits = int(sp["digits"])
+        return {"digits": digits, "point": 10.0 ** -digits, "spread": 0, "trade_contract_size": sp["contract"],
+                "volume_min": sp["volume_min"], "volume_max": sp["volume_max"], "volume_step": sp["volume_step"], "currency_profit": s[3:6], "currency_base": s[:3],
                 "trade_stops_level": 0, "filling_mode": 3, "trade_mode": 4, "visible": True}
 
     def rates(self, symbol: str, count: int = 500, tf: int | None = None) -> pd.DataFrame:
@@ -178,7 +216,7 @@ class PaperBroker:
     # ---- simulated fills ----
     def _pnl(self, p: dict, exit_price: float) -> float:
         d = 1 if p["type"] == 0 else -1
-        raw = d * (exit_price - p["price_open"]) * p["volume"] * CONTRACT.get(p["symbol"], 100000.0)
+        raw = d * (exit_price - p["price_open"]) * p["volume"] * paper_spec(p["symbol"])["contract"]
         return raw * self._to_usd(p["symbol"][3:6])
 
     def _to_usd(self, ccy: str) -> float:

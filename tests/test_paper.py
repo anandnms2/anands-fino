@@ -186,3 +186,26 @@ def test_each_venue_runs_on_its_own_timeframe(feed, monkeypatch):
     monkeypatch.setattr(engine, "utcnow", lambda: datetime(2026, 10, 21, 7, 1, tzinfo=timezone.utc))
     monkeypatch.setattr(engine, "market_open", lambda *a, **k: True)
     assert engine.run_cycle()["note"] == "no timeframe is due"
+
+
+def test_paper_spec_overrides_spread_contract_and_pnl(pb):
+    from app.main import app
+    c = TestClient(app)
+    d = paper.default_spec("EURUSD")
+    assert d["contract"] == 100000.0 and d["digits"] == 5
+    r = c.post("/api/paper/spec/EURUSD", auth=AUTH, headers=HDR, json={"spread": "0.00030", "contract": "1000", "volume_min": "0.1"})
+    assert r.status_code == 200 and r.json()["spread"] == 0.0003
+    t = pb.tick("EURUSD")
+    assert (t["ask"] - t["bid"]) == pytest.approx(0.0003)
+    info = pb.symbol_info("EURUSD")
+    assert info["trade_contract_size"] == 1000.0 and info["volume_min"] == 0.1
+    rows = c.get("/api/specs?venue=paper", auth=AUTH).json()
+    eur = next(x for x in rows["rows"] if x["symbol"] == "EURUSD")
+    assert rows["editable"] and eur["custom"] and eur["cost_per_lot"] == pytest.approx(0.0003 * 1000, abs=0.01)
+    assert c.post("/api/paper/spec/EURUSD", auth=AUTH, headers=HDR, json={"spread": "-1"}).status_code == 400
+    assert c.post("/api/paper/spec/NOPE", auth=AUTH, headers=HDR, json={"spread": "1"}).status_code == 400
+    c.post("/api/paper/spec/EURUSD", auth=AUTH, headers=HDR, json={"reset": True})
+    assert paper.paper_spec("EURUSD")["contract"] == 100000.0
+    # demo reads the broker's own specs and is read-only
+    demo = c.get("/api/specs?venue=demo", auth=AUTH).json()
+    assert demo["editable"] is False and demo["rows"][0]["ok"] and demo["rows"][0]["contract"] > 0

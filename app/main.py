@@ -15,7 +15,7 @@ from sqlalchemy import select
 from . import collectors, engine, sentiment, venues
 from .broker import BrokerError, get_broker
 from .config import get_settings
-from .db import Activity, Position, Signal, init_db, iso, kv_set, log, session
+from .db import Activity, Position, Signal, init_db, iso, kv_get, kv_set, log, session
 
 STATIC = Path(__file__).parent / "static"
 scheduler = BackgroundScheduler(timezone="UTC")
@@ -296,6 +296,60 @@ def api_symbols(body: dict = Body(...)):
         kv_set("symbols", syms)
         log(f"Symbols set from the dashboard: {', '.join(syms)}", "warn")
     return {"symbols": get_settings().symbol_list}
+
+
+@app.get("/api/specs")
+def api_specs(venue: str = "paper"):
+    """Contract specification and live spread of every traded symbol, as the chosen venue's broker reports them."""
+    if venue not in venues.VENUES:
+        raise HTTPException(400, "unknown venue")
+    cfg = get_settings()
+    broker = get_broker(venue)
+    rows, err = [], ""
+    try:
+        broker.connect()
+    except BrokerError as e:
+        err = str(e)
+    for sym in cfg.symbol_list:
+        row = {"symbol": sym, "ok": False}
+        if not err:
+            try:
+                info = broker.symbol_info(cfg.broker_symbol(sym))
+                tk = broker.tick(cfg.broker_symbol(sym))
+                sp = tk["ask"] - tk["bid"]
+                pt = info["point"] or 10.0 ** -info["digits"]
+                row.update({"ok": True, "broker_symbol": cfg.broker_symbol(sym), "digits": info["digits"], "point": pt, "contract": info["trade_contract_size"],
+                            "volume_min": info["volume_min"], "volume_step": info["volume_step"], "volume_max": info["volume_max"],
+                            "profit_ccy": info["currency_profit"], "base_ccy": info.get("currency_base", ""), "spread": sp,
+                            "spread_points": round(sp / pt, 1) if pt else None, "bid": tk["bid"], "ask": tk["ask"],
+                            "cost_per_lot": round(sp * info["trade_contract_size"], 2)})
+                if venue == "paper":
+                    from .paper import default_spec
+                    row["default"] = default_spec(sym)
+                    row["custom"] = sym in (kv_get("paper_specs") or {})
+            except BrokerError as e:
+                row["error"] = str(e)
+        rows.append(row)
+    return {"venue": venue, "editable": venue == "paper", "error": err, "rows": rows}
+
+
+@app.post("/api/paper/spec/{symbol}")
+def api_paper_spec(symbol: str, body: dict = Body(...)):
+    """Change the paper account's contract size, digits, spread or lot limits for one symbol ({"reset": true} restores defaults)."""
+    from .paper import reset_paper_spec, save_paper_spec
+
+    if symbol.upper() not in get_settings().symbol_list:
+        raise HTTPException(400, "symbol is not in the traded list")
+    if body.get("reset"):
+        reset_paper_spec(symbol)
+        log(f"Paper spec for {symbol.upper()} reset to defaults", "warn")
+        return {"ok": True}
+    try:
+        spec = save_paper_spec(symbol, body)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    log(f"Paper spec for {symbol.upper()}: spread {spec['spread']:g}, contract {spec['contract']:g}, digits {spec['digits']}", "warn")
+    return spec
 
 
 @app.post("/api/allow-live")

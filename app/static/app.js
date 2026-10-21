@@ -62,6 +62,7 @@ async function desk() {
       ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${esc(v.tf_label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
       <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
       <a class="btn" href="#/reports">Reports</a>
+      <a class="btn" href="#/specs">Contracts</a>
       <button class="btn pri" onclick="act('/api/cycle?force=true',{},'Cycle started')">Run cycle now</button>
       <button class="btn" onclick="act('/api/refresh',{},'Refreshing feeds')">Refresh feeds</button>
     </div></header>`;
@@ -257,13 +258,46 @@ async function reports() {
   $app.innerHTML = html;
 }
 
+/* ------------------------------------------------------------ contract specs */
+let specVenue = "paper";
+window.saveSpec = async (sym) => {
+  const g = (k) => document.getElementById(k + "_" + sym).value;
+  try { await api("/api/paper/spec/" + sym, "POST", { spread: g("sp"), contract: g("ct"), digits: g("dg"), volume_min: g("vm"), volume_step: g("vs") }); toast(sym + " saved"); } catch (e) { toast(e.message, true); }
+  render();
+};
+async function specs() {
+  const r = await api("/api/specs?venue=" + specVenue);
+  let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>Contract specifications</h1><div class="lab">What each venue's broker says a lot is, and what it costs to trade</div></div></div>
+    <div class="tools"><span class="seg" style="padding:0">${["paper", "demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>
+    <a class="btn" href="#/">Back to desk</a></div></header>`;
+  html += `<p class="mute" style="margin:0">${r.editable ? "Paper is a simulation, so you set the spread and contract here. Demo and Live show exactly what your cTrader account reports, read-only." : "Read from the cTrader account itself: contract size, digits, lot limits and the live spread are the broker's own, so metals, yen pairs and any non-standard symbol are sized from these numbers."}</p>`;
+  if (r.error) html += `<div class="banner warn"><strong>${esc(VLABEL[specVenue])} not reachable.</strong><span class="mute">${esc(r.error)}</span></div>`;
+  const inp = (id, sym, v, w) => `<input id="${id}_${sym}" value="${esc(v)}" style="width:${w}px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:12px var(--font-mono)">`;
+  html += `<section class="card"><div class="tw"><table style="min-width:900px"><thead><tr><th>Symbol</th><th>Digits</th><th>Units per lot</th><th>Lot min / step</th><th>P/L in</th><th>Spread (price)</th><th>Points</th><th>Cost per lot</th><th>Bid / Ask</th>${r.editable ? "<th></th>" : ""}</tr></thead><tbody>`;
+  for (const x of r.rows) {
+    if (!x.ok) { html += `<tr><td><strong>${esc(x.symbol)}</strong></td><td colspan="9" class="mute">${esc(x.error || "no data")}</td></tr>`; continue; }
+    if (r.editable) {
+      html += `<tr><td><strong>${esc(x.symbol)}</strong>${x.custom ? ' <span class="pill acc">custom</span>' : ""}</td><td>${inp("dg", x.symbol, x.digits, 44)}</td><td>${inp("ct", x.symbol, x.contract, 90)}</td>
+        <td>${inp("vm", x.symbol, x.volume_min, 56)} / ${inp("vs", x.symbol, x.volume_step, 56)}</td><td class="mono">${esc(x.profit_ccy)}</td><td>${inp("sp", x.symbol, x.spread, 80)}</td>
+        <td class="mono">${x.spread_points ?? "–"}</td><td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td>
+        <td class="r"><button class="btn sm pri" onclick="saveSpec('${x.symbol}')">Save</button>${x.custom ? ` <button class="btn sm" onclick="act('/api/paper/spec/${x.symbol}',{reset:true},'Reset')">Default</button>` : ""}</td></tr>`;
+    } else {
+      html += `<tr><td><strong>${esc(x.symbol)}</strong> <span class="mute mono" style="font-size:11px">${esc(x.broker_symbol)}</span></td><td class="mono">${x.digits}</td><td class="mono">${num(x.contract, 0)}</td>
+        <td class="mono">${x.volume_min} / ${x.volume_step}</td><td class="mono">${esc(x.profit_ccy)}</td><td class="mono">${esc(x.spread)}</td><td class="mono">${x.spread_points ?? "–"}</td>
+        <td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td></tr>`;
+    }
+  }
+  html += `</tbody></table></div></section>`;
+  $app.innerHTML = html;
+}
+
 /* ------------------------------------------------------------ router */
 async function render() {
   if (busy) return;
   busy = true;
   try {
     const m = location.hash.match(/^#\/signal\/(\d+)/);
-    await (m ? detail(m[1]) : location.hash === "#/reports" ? reports() : desk());
+    await (m ? detail(m[1]) : location.hash === "#/reports" ? reports() : location.hash === "#/specs" ? specs() : desk());
   } catch (e) {
     if (!$app.querySelector("header")) $app.innerHTML = `<p class="bad" style="padding:40px 0">Could not load: ${esc(e.message)}</p>`;
     else toast(e.message, true);
@@ -271,4 +305,4 @@ async function render() {
 }
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 render();
-timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports") render(); }, 10000);
+timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports" && location.hash !== "#/specs") render(); }, 10000);
