@@ -41,3 +41,20 @@ else
     done
   ) >/proc/1/fd/1 2>&1 &
 fi
+
+# ---- Watcher: if the MT5 terminal is not running 90s after start, launch it and log what Wine says.
+(
+  sleep 90
+  {
+    echo "[watch-mt5] processes: $(pgrep -a -f 'terminal64|wineserver|server.py' | cut -c1-120 | tr '\n' ';')"
+    if pgrep -f terminal64.exe >/dev/null 2>&1; then
+      echo "[watch-mt5] terminal64.exe is running"
+    else
+      echo "[watch-mt5] terminal64.exe NOT running, launching it"
+      s6-setuidgid abc env HOME=/config WINEPREFIX=/config/.wine DISPLAY=:1 WINEDEBUG=err+all \
+        wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" 2>&1 | head -60 &
+      sleep 30
+      echo "[watch-mt5] after launch: $(pgrep -a -f terminal64 | cut -c1-100 | tr '\n' ';')"
+    fi
+  } >/proc/1/fd/1 2>&1
+) &
