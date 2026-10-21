@@ -209,24 +209,43 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
     cot = (collectors.snapshot("cot") or {}).get("data")
 
     # 1. technicals for every symbol
-    techs, infos, ticks, closes, candle_times, stale = {}, {}, {}, {}, {}, {}
+    techs, infos, ticks, closes, candle_times, stale, stf = {}, {}, {}, {}, {}, {}, {}
+    now_ = utcnow()
     for sym in cfg.symbol_list:
         bsym = cfg.broker_symbol(sym)
         try:
             info = broker.symbol_info(bsym)
-            df = broker.rates(bsym, 3500 if tf <= 1 else 500 if tf >= 30 else 1500, tf)
             tick = broker.tick(bsym)
         except BrokerError as e:
             log(f"{sym}: {e}", "error", sym)
             continue
-        closed = df.iloc[:-1].reset_index(drop=True)
-        if len(closed) < MIN_CANDLES:
-            log(f"{sym}: only {len(closed)} candles, need {MIN_CANDLES}", "warn", sym)
+        spread = max(tick["ask"] - tick["bid"], 0.0)
+        t, done = tf, False
+        while True:   # auto chart: climb to a bigger candle until one candle moves several spreads, else the costs eat every trade
+            try:
+                df = broker.rates(bsym, 3500 if t <= 1 else 500 if t >= 30 else 1500, t)
+            except BrokerError as e:
+                log(f"{sym}: {e}", "error", sym)
+                break
+            closed = df.iloc[:-1].reset_index(drop=True)
+            if len(closed) < MIN_CANDLES:
+                log(f"{sym}: only {len(closed)} candles, need {MIN_CANDLES}", "warn", sym)
+                break
+            tech = compute_technicals(closed, info["digits"], t)
+            nxt = next((x for x in V.TIMEFRAMES if x > t and x <= max(cfg.auto_tf_max, tf)), None)
+            if cfg.auto_tf and nxt and spread > 0 and tech["atr"] < cfg.auto_tf_atr_spreads * spread:
+                t = nxt
+                continue
+            done = True
+            break
+        if not done:
             continue
+        if t != tf and not force and not V.due(t, now_):
+            continue   # this symbol trades on a bigger candle that has not closed yet
         last_open = closed["time"].iloc[-1]
         age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
-        stale[sym] = (not force) and age_min > 4 * tf + (12 if data_is_paper else 2)   # free feeds lag, metals most
-        techs[sym] = compute_technicals(closed, info["digits"], tf)
+        stale[sym] = (not force) and age_min > 4 * t + (12 if data_is_paper else 2)   # free feeds lag, metals most
+        techs[sym], stf[sym] = tech, t
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
         candle_times[sym] = iso(last_open.to_pydatetime())
@@ -261,6 +280,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
     # strongest setups first, so the open-trade slots go to the best of the 13 rather than the first in the list
     for sym in sorted(prep, key=lambda s: -abs(prep[s][1]["score"])):
         tech, info, tick = techs[sym], infos[sym], ticks[sym]
+        tf = stf[sym]
         factors, comb = prep[sym]
 
         def mk(venue: str = "") -> Signal:

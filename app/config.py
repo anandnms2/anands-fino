@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     daily_loss_cap_pct: float = 2.0
     max_open: int = 3
     min_rr: float = 1.5
-    max_spread_to_stop: float = 0.10
+    max_spread_to_stop: float = 0.25
     min_confidence: float = 0.6
     max_loss_streak: int = 5
     blackout_min: int = 15
@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
     min_stop_spreads: float = 0.0      # 0 = derived from MAX_SPREAD_TO_STOP (stop at least 1.05 / that many spreads)     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
+    auto_tf: bool = True               # per symbol: climb to a bigger candle when the chosen one moves less than AUTO_TF_ATR_SPREADS spreads
+    auto_tf_atr_spreads: float = 3.0
+    auto_tf_max: int = 15              # the biggest candle the auto chart will climb to
     claude_cooldown_min: int = 15      # after Claude says NO to a symbol and direction, do not ask again for this long
     run_cycle_on_start: bool = False
     scheduler_enabled: bool = True

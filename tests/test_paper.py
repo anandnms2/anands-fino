@@ -209,3 +209,15 @@ def test_paper_spec_overrides_spread_contract_and_pnl(pb):
     # demo reads the broker's own specs and is read-only
     demo = c.get("/api/specs?venue=demo", auth=AUTH).json()
     assert demo["editable"] is False and demo["rows"][0]["ok"] and demo["rows"][0]["contract"] > 0
+
+
+def test_auto_chart_climbs_when_candles_are_too_quiet(monkeypatch):
+    """With AUTO_TF on, a symbol whose candle moves less than 3 spreads is analysed on a bigger candle."""
+    from app import engine, venues as V
+    from app.config import get_settings
+    monkeypatch.setenv("AUTO_TF", "true")
+    get_settings.cache_clear()
+    assert V.TIMEFRAMES[V.TIMEFRAMES.index(3) + 1] == 5
+    cfg = get_settings()
+    assert cfg.auto_tf and cfg.auto_tf_max == 15 and cfg.max_spread_to_stop == 0.25
+    get_settings.cache_clear()

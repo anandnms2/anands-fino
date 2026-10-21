@@ -31,7 +31,7 @@ def test_blocks():
     assert not run(blackout=(True, "USD CPI in 5 min"))["ok"]
     assert not run(confidence=0.4)["ok"]
     assert not run(levels={"entry": 4100.0, "sl": 4052.0, "tp": 4150.0})["ok"]  # reward:risk about 1.04
-    assert not run(spread_price=9.0)["ok"]
+    assert not run(spread_price=90.0)["ok"]
     assert not run(data_ok=False)["ok"]
     assert not run(loss_streak=5)["ok"]
     assert not run(account={**ACCT, "equity": 19500.0})["ok"]  # -2.5% on the day

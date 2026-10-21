@@ -12,6 +12,7 @@ os.environ.update({
     "ANTHROPIC_API_KEY": "test-key",
     "MODE": "demo_auto",
     "TIMEFRAME_MIN": "60",   # the older tests model hourly candles; the M3 behaviour has its own tests
+    "AUTO_TF": "false",      # the older tests pin one chart; auto-chart has its own test
 })
 
 
