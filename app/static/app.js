@@ -146,7 +146,9 @@ async function desk() {
 
   html += `<section class="card"><div class="hd"><h2>Trading profile</h2><span class="mono mute">${st.profile === "fast" ? "fast" : "normal"}</span></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Fast: score ±20, 50% of factors agree, Claude re-asked after 5 min, up to 5 open trades. Normal: score ±35, 60%, 15 min, 3 open. Loss limits, news blackout, spread checks and Claude's YES/NO apply in both.</div>
-    <button class="btn sm" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn sm" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div></section>`;
+    <button class="btn sm" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn sm" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button>
+    <div class="mute" style="margin:12px 0 8px">Claude's veto: <strong>${st.claude_veto ? "ON (Claude can say no)" : "OFF (Claude is not asked)"}</strong></div>
+    <button class="btn sm" onclick="act('/api/claude-veto',{on:${!st.claude_veto}},'Claude veto ${st.claude_veto ? "off" : "on"}')">Turn veto ${st.claude_veto ? "off" : "on"}</button></div></section>`;
 
   html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>

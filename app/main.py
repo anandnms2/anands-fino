@@ -290,6 +290,14 @@ def api_profile(body: dict = Body(...)):
     return {"profile": profile_name()}
 
 
+@app.post("/api/claude-veto")
+def api_claude_veto(body: dict = Body(...)):
+    on = bool(body.get("on"))
+    kv_set("claude_veto", on)
+    log("Claude has the final say again" if on else "Claude's veto is OFF: trades are taken on the score and the risk gate alone", "warn")
+    return {"claude_veto": on}
+
+
 @app.post("/api/symbols")
 def api_symbols(body: dict = Body(...)):
     """Set the traded symbols from the dashboard ({"symbols": "EURUSD,XAUUSD"}) or go back to the environment list ({"reset": true})."""

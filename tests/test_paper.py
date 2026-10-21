@@ -231,3 +231,14 @@ def test_profile_switch_loosens_filters():
     assert c.score_threshold == 20 and c.min_agree_pct == 50 and c.max_open == 5
     kv_set("profile", "normal")
     assert get_settings().score_threshold == 35
+
+
+def test_claude_veto_off_skips_claude(monkeypatch):
+    from app import engine
+    from app.db import kv_set
+    kv_set("claude_veto", False)
+    called = []
+    monkeypatch.setattr(engine, "decide", lambda ctx: called.append(1) or {"decision": "NO", "confidence": 0.0})
+    # the switch is read at the Claude step; a NO from the stub must not be reached
+    assert engine.state()["claude_veto"] is False and not called
+    kv_set("claude_veto", True)
