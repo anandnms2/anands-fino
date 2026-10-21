@@ -46,8 +46,6 @@ services:
       - SERVICE_FQDN_MT5_3000
       - CUSTOM_USER=anand
       - PASSWORD=${SERVICE_PASSWORD_MT5}
-      - PUID=1000
-      - PGID=1000
       - TZ=${TZ:-Africa/Dar_es_Salaam}
     shm_size: "1gb"            # browser-based desktops blank out or crash with Docker's default 64 MB
     security_opt:
