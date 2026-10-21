@@ -109,21 +109,21 @@ function renderBar() {
   const st = S.st; if (!st) return;
   const V = st.venues, v = V[S.venue] || {}, a = v.account, r = st.risk, pg = pageName();
   const nav = [["terminal", "#/", "Terminal"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
-  $bar.innerHTML = `<div class="bar-in"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
+  $bar.innerHTML = `<div class="bar-in"><div class="bar-r1"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
     <nav class="bnav" aria-label="Pages">${nav.map(([k, h, l]) => `<a href="${h}" class="${pg === k || (pg === "signal" && k === "terminal") ? "on" : ""}">${l}</a>`).join("")}</nav>
-    <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')">${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div>
-    <div class="metrics">
+    <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')">${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div></div>
+    <div class="bar-r2"><div class="metrics">
       <div><span>BALANCE</span><b class="mono">${a ? "$" + num(a.balance, 2) : "–"}</b></div>
       <div><span>EQUITY</span><b class="mono" id="bar-eq">${a ? "$" + num(a.equity, 2) : "–"}</b></div>
       <div><span>FLOATING P/L</span><b class="mono b" id="bar-fl">–</b></div>
       <div><span>OPEN RISK</span><b class="mono">${num(v.open_risk_pct || 0, 2)}% <i>/ ${num(r.open_risk_cap_pct, 1)}%</i></b></div>
-      <div><span>DAY P/L</span><b class="mono ${a && a.day_pnl < 0 ? "bad" : ""}">${a ? signed(a.day_pnl_pct, 2) + "%" : "–"} <i>/ -${r.daily_loss_cap_pct}%</i></b></div>
-    </div>
+      <div><span>DAY P/L</span><b class="mono ${a && a.day_pnl < 0 ? "bad" : ""}">${a ? signed(a.day_pnl_pct, 2) + "%" : "–"} <i>/ -${r.daily_loss_cap_pct}%</i></b></div></div>
     <div class="chips"><span class="chip"><span id="bar-dot" class="dot"></span><span class="mono" id="bar-lat">stream …</span></span>
       <span class="chip">Profile <b class="acc">${st.profile === "fast" ? "FAST" : "NORMAL"}</b></span>
       <span class="chip">Trailing <b class="${st.trail ? "ok" : "mute"}">${st.trail ? "ON" : "OFF"}</b></span>
       <span class="chip">Claude veto <b class="${st.claude_veto ? "ok" : "mute"}">${st.claude_veto ? "ON" : "OFF"}</b></span>
-      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div>`;
+      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div></div>`;
+  document.documentElement.style.setProperty("--barh", $bar.offsetHeight + "px");
   barLive();
 }
 window.pickVenue = (v) => {
@@ -147,6 +147,7 @@ async function terminal() {
   if (!S.mounted || !$app.querySelector(".term")) mountTerminal();
   const [st, latest, pos, appr, actv] = await Promise.all([api("/api/state"), api("/api/signals/latest"), api("/api/positions"), api("/api/approvals"), api("/api/activity?limit=30")]);
   Object.assign(S, { st, latest, posd: pos, appr, actv });
+  if (pageName() !== "terminal" || !$app.querySelector(".term")) return;
   if (!st.symbols.includes(S.sym)) S.sym = st.symbols[0] || "";
   syncStream();
   if (!S.tf) S.tf = (st.venues[S.venue] || {}).tf || 1;
@@ -527,8 +528,9 @@ async function ensureSt() {
   if (S.st) { renderBar(); api("/api/state").then((d) => { S.st = d; renderBar(); }).catch(() => {}); return; }
   S.st = await api("/api/state"); renderBar();
 }
+let again = false;
 async function render() {
-  if (busy) return;
+  if (busy) { again = true; return; }   // a render is in flight: run once more when it ends, so a click on a menu item is never dropped
   busy = true;
   try {
     const pg = pageName();
@@ -541,7 +543,7 @@ async function render() {
   } catch (e) {
     if (!$app.innerHTML.trim() || $app.querySelector("p.mute")) $app.innerHTML = `<p class="bad" style="padding:40px 24px">Could not load: ${esc(e.message)}</p>`;
     else toast(e.message, true);
-  } finally { busy = false; }
+  } finally { busy = false; if (again) { again = false; render(); } }
 }
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 startStream();

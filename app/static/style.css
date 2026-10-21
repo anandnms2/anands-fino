@@ -215,3 +215,33 @@ svg text { font-family: var(--font-mono); }
 .pagehead h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
 .pagehead .lab { margin-top: 2px; }
 .pagehead .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* top bar: two clear rows. Row 1 is navigation and switches, row 2 is the account numbers. */
+.bar-in { display: block; padding: 0; }
+.bar-r1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; padding: 8px 20px; }
+.bar-r1 > * + * { margin-left: 22px; padding-left: 22px; border-left: 1px solid var(--line); }
+.bar-r1 .chips { margin-left: auto; }
+.bnav a { padding: 8px 16px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 6px 0; padding: 7px 20px; border-top: 1px solid var(--line); background: #0e0e11; }
+.metrics > div { padding: 0 26px; border-left: 1px solid var(--line); }
+.metrics > div:first-child { padding-left: 0; border-left: 0; }
+@media (max-width: 900px) { .bar-r1 > * + * { margin-left: 12px; padding-left: 12px; } .metrics > div { padding: 0 14px; } }
+
+/* terminal fits the window: watchlist, chart and side panel scroll on their own, open trades stay pinned underneath */
+#app.full .term { grid-template-rows: minmax(0, 1fr) auto; height: calc(100vh - var(--barh, 120px)); min-height: 520px; }
+#app.full .term > .wl, #app.full .term > .side { overflow-y: auto; min-height: 0; }
+#app.full .term > .chartc { min-height: 0; }
+#app.full .cv { min-height: 160px; }
+#app.full .bottom { max-height: 36vh; overflow-y: auto; border-top: 2px solid var(--line); }
+#app.full .bottom .tabs { position: sticky; top: 0; background: var(--panel); z-index: 2; }
+@media (max-width: 1100px) { #app.full .term { height: auto; } #app.full .term > .wl, #app.full .term > .side { overflow: visible; } }
+
+.bar-r1 .chips { margin-left: 0; }
+.metrics { align-items: center; }
+.metrics .chips { margin-left: auto; padding-left: 20px; border-left: 0; }
+.metrics > .chips { padding: 0; }
+#app.full .bottom { min-height: 150px; }
+
+.bar-r2 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; border-top: 1px solid var(--line); background: #0e0e11; padding: 7px 20px; }
+.bar-r2 .metrics { border-top: 0; padding: 0; background: none; }
+.bar-r2 .chips { margin-left: auto; }
