@@ -59,3 +59,10 @@ def test_history_shorter_than_six_months_is_refused():
     import pytest
     with pytest.raises(RuntimeError, match="180 needed"):
         backtest.test_symbol("EURUSD", 60, _bars(2000))     # about 83 days
+
+
+def test_resample_builds_three_minute_candles_and_short_history_rules():
+    one = pd.DataFrame({"time": 1_700_000_040 + np.arange(9) * 60, "open": np.arange(9, dtype=float), "high": np.arange(9) + 1.0, "low": np.arange(9) - 1.0, "close": np.arange(9) + .5})
+    t3 = backtest.resample(one, 3)
+    assert (t3["time"] % 180 == 0).all() and t3["high"].iloc[0] >= one["high"].iloc[0]
+    assert backtest.MIN_DAYS_BY_TF[1] < backtest.MIN_DAYS_BY_TF[60] == 180 and set(backtest.TIMEFRAMES) == {1, 3, 5, 15, 30, 60}

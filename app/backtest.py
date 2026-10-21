@@ -14,8 +14,10 @@ from .db import kv_get, kv_set, log, utcnow
 from .paper import UA, YAHOO, paper_spec
 
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
-TIMEFRAMES = (60,)               # only hourly candles go back far enough (about 24 months); Yahoo gives just 60 days of 5m/15m/30m
-MIN_DAYS = 180                   # a backtest must cover at least 6 months or it cannot be called proven
+TIMEFRAMES = (1, 3, 5, 15, 30, 60)   # minutes. Yahoo keeps about 30 days of 1m (3m is built from it), 60 days of 5m/15m/30m and 2 years of 1h
+# days of history a test must cover before it can prove anything: short windows are allowed for the fast candles, hourly must cover 6 months
+MIN_DAYS_BY_TF = {1: 25, 3: 25, 5: 50, 15: 50, 30: 50, 60: 180}
+MIN_DAYS = 180
 STOPS = (1.0, 1.5, 2.0)          # stop distance in ATRs
 RRS = (1.2, 1.5, 2.0)            # target as a multiple of the stop
 SESSIONS = ("all", "london_ny")
@@ -25,19 +27,44 @@ MIN_TRAIN, MIN_TEST = 25, 12
 OK_TEST_EXPECTANCY, OK_TEST_PF = 0.05, 1.15
 MIN_TEST_STRONG = 30            # a setup judged on fewer unseen trades than this is too thin to trust
 MIN_T = 1.0                     # and the average win must be at least one standard error above zero, else it is indistinguishable from luck
+MIN_T_FAST = 1.5                # short windows and six candle sizes tested per symbol give luck more chances, so the bar is higher below 1h
 MIN_ROBUST = 0.4                # and at least this share of ALL tested settings must also be positive on the unseen part: an edge that exists only for one lucky setting is noise
 
 
+def _yahoo_get(ysym: str, params: dict) -> pd.DataFrame:
+    r = httpx.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}", params=params, headers=UA, timeout=40, follow_redirects=True)
+    r.raise_for_status()
+    res = r.json()["chart"]["result"][0]
+    q = res["indicators"]["quote"][0]
+    return pd.DataFrame({"time": res["timestamp"], "open": q["open"], "high": q["high"], "low": q["low"], "close": q["close"]}).dropna()
+
+
+def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    """Build bigger candles from smaller ones (Yahoo has no 3-minute candles)."""
+    g = (df["time"] // (minutes * 60)) * (minutes * 60)
+    out = df.groupby(g).agg(open=("open", "first"), high=("high", "max"), low=("low", "min"), close=("close", "last")).reset_index().rename(columns={"time": "time"})
+    return out.dropna().reset_index(drop=True)
+
+
 def fetch_history(symbol: str, tf: int) -> pd.DataFrame:
-    iv, rng = RANGE[tf]
     last = "no data"
     for ysym in YAHOO.get(symbol, [f"{symbol}=X"]):
         try:
-            r = httpx.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}", params={"interval": iv, "range": rng}, headers=UA, timeout=40, follow_redirects=True)
-            r.raise_for_status()
-            res = r.json()["chart"]["result"][0]
-            q = res["indicators"]["quote"][0]
-            df = pd.DataFrame({"time": res["timestamp"], "open": q["open"], "high": q["high"], "low": q["low"], "close": q["close"]}).dropna()
+            if tf in (1, 3):   # 1m comes in 7-day pieces, 4 pieces back from now
+                now, parts = int(time.time()), []
+                for k in range(4):
+                    p2 = now - k * 7 * 86400
+                    try:
+                        parts.append(_yahoo_get(ysym, {"interval": "1m", "period1": p2 - 7 * 86400 + 60, "period2": p2}))
+                    except Exception:  # noqa: BLE001
+                        if not parts:
+                            raise
+                        break
+                df = pd.concat(parts).drop_duplicates("time").sort_values("time")
+                df = resample(df, 3) if tf == 3 else df
+            else:
+                iv, rng = RANGE[tf]
+                df = _yahoo_get(ysym, {"interval": iv, "range": rng})
             if len(df) >= 400:
                 return df.reset_index(drop=True)
             last = f"{ysym}: only {len(df)} candles"
@@ -104,8 +131,9 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     df = fetch_history(symbol, tf) if df is None else df
     spread = float(paper_spec(symbol)["spread"])
     days = (float(df["time"].iloc[-1]) - float(df["time"].iloc[0])) / 86400
-    if days < MIN_DAYS:
-        raise RuntimeError(f"{symbol} {tf}m history covers only {days:.0f} days, {MIN_DAYS} needed")
+    need = MIN_DAYS_BY_TF.get(tf, MIN_DAYS)
+    if days < need:
+        raise RuntimeError(f"{symbol} {tf}m history covers only {days:.0f} days, {need} needed")
     cut = int(len(df) * 0.6)
     results, base = [], None
     for name in S.STRATEGIES:
@@ -124,7 +152,7 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
         t = best["test"]
-        row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and t.get("t", 0) >= MIN_T and row["share_positive_test"] >= MIN_ROBUST
+        row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and t.get("t", 0) >= (MIN_T if tf >= 60 else MIN_T_FAST) and row["share_positive_test"] >= MIN_ROBUST
     return row
 
 
