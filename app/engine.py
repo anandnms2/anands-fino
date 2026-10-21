@@ -10,7 +10,7 @@ from sqlalchemy import select
 from . import collectors, scoring
 from .broker import ACCOUNT_TRADE_MODE_DEMO, BrokerError, get_broker
 from . import venues as V
-from .config import risk_overrides, Settings, get_settings, tf_label
+from .config import risk_overrides, tune_table, Settings, get_settings, tf_label
 from .db import NewsItem, Position, Signal, iso, kv_get, kv_set, log, session, utcnow
 from .decision import decide
 from .features import compute_technicals
@@ -876,6 +876,7 @@ def state() -> dict:
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},
+        "tune": tune_table(),
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

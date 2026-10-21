@@ -525,31 +525,45 @@ def api_paper_reset():
     return {"ok": True}
 
 
+@app.post("/api/tune")
 @app.post("/api/risk")
-def api_risk(body: dict = Body(...)):
-    """Set risk limits by hand ({"daily_loss_cap_pct": 3, ...}); {"reset": true} returns to the environment values."""
-    from .config import RISK_FIELDS
+def api_tune(body: dict = Body(...)):
+    """Set any tunable rule by hand ({"daily_loss_cap_pct": 3, "w_trend": 30}). {"clear": ["max_open"]} drops single overrides, {"reset": true} drops all."""
+    from .config import TUNABLES, profile_settings, tune_table
 
     if body.get("reset"):
         kv_set("risk", None)
         get_settings.cache_clear()
-        log("Risk limits reset to the environment values", "warn")
+        log("All rules reset to the profile values", "warn")
         return {"ok": True}
     cur = dict(kv_get("risk") or {})
+    for k in body.get("clear") or []:
+        cur.pop(k, None)
+    base = {r["key"]: r["base"] for r in tune_table()}
+    changed = []
     for k, v in body.items():
-        if k not in RISK_FIELDS:
-            raise HTTPException(400, f"unknown limit {k}")
-        lo, hi, whole = RISK_FIELDS[k]
+        if k in ("clear", "reset"):
+            continue
+        if k not in TUNABLES:
+            raise HTTPException(400, f"unknown rule {k}")
+        _g, label, lo, hi, _st, whole = TUNABLES[k]
         try:
             x = float(v)
         except (TypeError, ValueError):
-            raise HTTPException(400, f"{k} must be a number")
-        if not (lo <= x <= hi) or x != x:
-            raise HTTPException(400, f"{k} must be between {lo:g} and {hi:g}")
-        cur[k] = int(round(x)) if whole else round(x, 3)
-    kv_set("risk", cur)
-    log("Risk limits set by hand: " + ", ".join(f"{k} {v:g}" for k, v in cur.items()), "warn")
-    return {"ok": True, "risk": cur}
+            raise HTTPException(400, f"{label} must be a number")
+        if not (lo <= x <= hi):
+            raise HTTPException(400, f"{label} must be between {lo:g} and {hi:g}")
+        x = int(round(x)) if whole else round(x, 4)
+        if abs(x - float(base[k])) < 1e-9:
+            if cur.pop(k, None) is not None:
+                changed.append(f"{label} back to the profile value")
+        elif cur.get(k) != x:
+            cur[k] = x
+            changed.append(f"{label} {x:g}")
+    kv_set("risk", cur or None)
+    if changed:
+        log("Rules set by hand: " + "; ".join(changed), "warn")
+    return {"ok": True, "custom": cur}
 
 
 @app.post("/api/paper/balance")

@@ -209,29 +209,86 @@ def profile_name() -> str:
     return base.profile if base.profile in PROFILES else "fast"
 
 
-RISK_FIELDS = {  # dashboard-editable risk limits: (minimum, maximum, whole number?)
-    "risk_per_trade_pct": (0.01, 5.0, False),
-    "daily_loss_cap_pct": (0.1, 20.0, False),
-    "max_open": (1, 30, True),
-    "max_loss_streak": (1, 30, True),
-    "min_rr": (0.5, 5.0, False),
+# Every rule that can be changed by hand from the dashboard: key -> (group, label, minimum, maximum, step, whole number?)
+TUNABLES: dict[str, tuple] = {
+    "score_threshold": ("entry", "Score needed (±)", 5, 90, 1, False),
+    "min_agree_pct": ("entry", "Factors that must agree (%)", 0, 100, 5, False),
+    "min_atr_to_spread": ("entry", "Candle must move (x spread)", 0, 10, 0.1, False),
+    "auto_tf_atr_spreads": ("entry", "Auto chart climbs below (x spread)", 0, 10, 0.1, False),
+    "stop_atr_mult": ("stops", "Default stop (ATR)", 0.3, 5, 0.1, False),
+    "rr_target": ("stops", "Default target (x stop)", 0.5, 6, 0.1, False),
+    "max_tp_atr": ("stops", "Target never further than (ATR, 0 = no cap)", 0, 10, 0.1, False),
+    "max_stop_atr": ("stops", "Skip when the stop is wider than (ATR)", 0.5, 8, 0.1, False),
+    "min_rr": ("stops", "Minimum reward : risk", 0.5, 5, 0.1, False),
+    "spread_stop_limit": ("stops", "Spread may be at most this share of the stop", 0.05, 1, 0.01, False),
+    "stop_floor_spreads": ("stops", "Stop at least this many spreads (0 = automatic)", 0, 30, 0.5, False),
+    "risk_per_trade_pct": ("risk", "Risk per trade (% of equity)", 0.01, 5, 0.05, False),
+    "daily_loss_cap_pct": ("risk", "Daily loss limit (%)", 0.1, 20, 0.1, False),
+    "max_open": ("risk", "Max open trades", 1, 30, 1, True),
+    "max_loss_streak": ("risk", "Losses in a row before pause", 1, 30, 1, True),
+    "blackout_min": ("risk", "News blackout around high-impact events (min)", 0, 120, 5, True),
+    "min_confidence": ("claude", "Claude confidence needed", 0, 1, 0.05, False),
+    "claude_cooldown_min": ("claude", "Claude re-asked after NO (min)", 0, 240, 5, True),
+    "claude_max_calls_per_day": ("claude", "Claude calls per day", 1, 1000, 10, True),
+    "approval_ttl_min": ("claude", "Pending approval expires after (min)", 1, 120, 1, True),
+    "trail_start_r": ("trail", "Move to break-even at (R)", 0.1, 10, 0.1, False),
+    "trail_lock_r": ("trail", "Lock this much profit then (R)", 0, 5, 0.05, False),
+    "trail_step_r": ("trail", "Start following the price at (R)", 0.1, 20, 0.1, False),
+    "trail_gap_r": ("trail", "Follow this far behind the price (R)", 0.05, 10, 0.05, False),
+    "trail_tp_r": ("trail", "Keep the target this far ahead (R)", 0, 10, 0.1, False),
+    "watch_exit_score": ("watch", "Close on reversal at score (against the trade)", 5, 100, 1, False),
+    "watch_confirm": ("watch", "Reversal must be seen this many checks in a row", 1, 10, 1, True),
 }
+for _f in DEFAULT_WEIGHTS:
+    TUNABLES["w_" + _f] = ("weights", _f.capitalize() + " weight", 0, 100, 1, False)
+RISK_FIELDS = TUNABLES  # old name
 
 
 def risk_overrides() -> dict:
+    """The values set by hand (stored under one key in the database)."""
     try:
         from .db import kv_get
 
         raw = kv_get("risk") or {}
     except Exception:  # noqa: BLE001  (database not ready yet)
         return {}
-    return {k: raw[k] for k in RISK_FIELDS if k in raw}
+    return {k: raw[k] for k in TUNABLES if k in raw}
+
+
+def _apply(base: "Settings", over: dict) -> "Settings":
+    w = {k[2:]: v for k, v in over.items() if k.startswith("w_")}
+    upd = {k: v for k, v in over.items() if not k.startswith("w_")}
+    if w:
+        upd["weights"] = json.dumps({**base.weights_dict, **w})
+    return base.model_copy(update=upd) if upd else base
+
+
+def profile_settings() -> "Settings":
+    """Settings as the environment and the chosen profile give them, before any value set by hand."""
+    base = _base()
+    over = PROFILES.get(profile_name(), {})
+    return base.model_copy(update=over) if over else base
+
+
+def tune_table() -> list[dict]:
+    """Every editable rule with its value now, its profile value, and whether it was set by hand."""
+    base, now, mine = profile_settings(), get_settings(), risk_overrides()
+    out = []
+    for k, (grp, label, lo, hi, step, whole) in TUNABLES.items():
+        if k.startswith("w_"):
+            f = k[2:]
+            b, v = base.weights_dict[f], now.weights_dict[f]
+        else:
+            b, v = getattr(base, k), getattr(now, k)
+        out.append({"key": k, "group": grp, "label": label, "min": lo, "max": hi, "step": step, "int": whole,
+                    "value": v, "base": b, "custom": k in mine})
+    return out
 
 
 def get_settings() -> Settings:
     base = _base()
-    over = {**PROFILES.get(profile_name(), {}), **risk_overrides()}   # limits set by hand beat both the profile and the environment
-    return base.model_copy(update=over) if over else base
+    over = {**PROFILES.get(profile_name(), {}), **risk_overrides()}   # values set by hand beat both the profile and the environment
+    return _apply(base, over) if over else base
 
 
 get_settings.cache_clear = _base.cache_clear  # type: ignore[attr-defined]

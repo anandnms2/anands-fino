@@ -253,3 +253,12 @@ svg text { font-family: var(--font-mono); }
 .symlink { color: var(--fg); text-decoration: none; }
 .symlink:hover b { color: var(--accent); text-decoration: underline; }
 .tfm { font-size: 10px; font-style: normal; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; }
+
+.sub { margin: 18px 0 4px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); font-weight: 600; }
+.trow { align-items: center; }
+.trow.mine > span:first-child { color: var(--accent-ink, #ffa45c); }
+.trow em { font-style: normal; font-size: 11px; }
+.tin { display: flex; align-items: center; gap: 6px; }
+.tin input { width: 96px; text-align: right; background: var(--panel2, #1c1c20); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+.tin input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.trow.mine .tin input { border-color: var(--accent); }

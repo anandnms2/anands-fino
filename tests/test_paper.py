@@ -360,14 +360,14 @@ def test_risk_limits_editable_validated_and_reset():
     from app.config import get_settings
 
     base = get_settings().daily_loss_cap_pct
-    main.api_risk({"daily_loss_cap_pct": 4.5, "max_open": 7})
+    main.api_tune({"daily_loss_cap_pct": 4.5, "max_open": 7})
     c = get_settings()
     assert c.daily_loss_cap_pct == 4.5 and c.max_open == 7
     for bad in ({"max_open": 0}, {"daily_loss_cap_pct": 99}, {"risk_per_trade_pct": "x"}, {"nope": 1}):
         with pytest.raises(HTTPException):
-            main.api_risk(bad)
+            main.api_tune(bad)
     assert get_settings().max_open == 7          # a rejected change leaves the saved limits alone
-    main.api_risk({"reset": True})
+    main.api_tune({"reset": True})
     assert get_settings().daily_loss_cap_pct == base
 
 
@@ -384,3 +384,20 @@ def test_position_row_carries_the_candle_size_of_its_signal():
     rows = main.api_positions()["open"]
     assert [r["tf"] for r in rows if r["ticket"] == 900001] == [5]
     assert main._tf_minutes("H1") == 60 and main._tf_minutes(None) is None
+
+
+def test_every_rule_is_tunable_and_weights_flow_through():
+    from app import main
+    from app.config import TUNABLES, get_settings, tune_table
+
+    assert {"score_threshold", "trail_gap_r", "w_trend", "min_confidence", "max_tp_atr"} <= set(TUNABLES)
+    main.api_tune({"w_trend": 40, "score_threshold": 12, "trail_gap_r": 0.5})
+    c = get_settings()
+    assert c.weights_dict["trend"] == 40 and c.weights_dict["news"] == 15 and c.score_threshold == 12 and c.trail_gap_r == 0.5
+    row = {r["key"]: r for r in tune_table()}
+    assert row["score_threshold"]["custom"] and row["score_threshold"]["value"] == 12 and row["score_threshold"]["base"] != 12
+    main.api_tune({"score_threshold": row["score_threshold"]["base"]})   # typing the profile value back clears the override
+    assert not {r["key"]: r for r in tune_table()}["score_threshold"]["custom"]
+    main.api_tune({"clear": ["w_trend"]})
+    assert get_settings().weights_dict["trend"] == 25
+    main.api_tune({"reset": True})
