@@ -146,8 +146,14 @@ def fetch_news() -> int:
 
 
 # ------------------------------------------------------------------ Economic calendar
-def fetch_calendar() -> list[dict]:
+def fetch_calendar(min_age_min: float = 30.0) -> list[dict]:
+    """The free calendar host rate-limits hard (429), so reuse the stored copy unless it is older than min_age_min."""
+    age = snapshot_age_min("calendar")
+    if age is not None and age < min_age_min:
+        return snapshot("calendar")["data"]
     r = httpx.get(get_settings().calendar_url, timeout=30, headers=UA, follow_redirects=True)
+    if r.status_code == 429 and snapshot("calendar"):
+        return snapshot("calendar")["data"]  # keep the stored copy; blackout() blocks trading if it gets too old
     r.raise_for_status()
     events = []
     for e in r.json():
@@ -182,7 +188,10 @@ def blackout(symbol: str, now: datetime | None = None) -> tuple[bool, str]:
     now = now or utcnow()
     snap = snapshot("calendar")
     if not snap:
-        return False, "calendar not loaded"
+        return True, "calendar not loaded, cannot rule out a news event"
+    age = snapshot_age_min("calendar")
+    if age is not None and age > 26 * 60:
+        return True, f"calendar data is {age / 60:.0f}h old, cannot rule out a news event"
     win = timedelta(minutes=get_settings().blackout_min)
     cur = symbol_currencies(symbol)
     for e in snap["data"]:

@@ -55,3 +55,15 @@ def test_extract_json_keeps_list_of_objects_and_wrapped_lists():
     rows = _valid(extract_json('[{"i":0,"XAUUSD":1,"EURUSD":5},{"i":1,"XAUUSD":-1}]'), 2, syms)
     assert rows[0] == {"XAUUSD": 1, "EURUSD": 0} and rows[1]["XAUUSD"] == -1
     assert 0 in _valid(extract_json('{"tags":[{"i":0,"XAUUSD":1}]}'), 1, syms)
+
+
+def test_blackout_fails_closed_without_fresh_calendar():
+    from app import collectors, db
+
+    with db.session() as s:
+        s.query(db.KV).delete()
+        s.commit()
+    blocked, why = collectors.blackout("XAUUSD")
+    assert blocked and "not loaded" in why
+    collectors.save_snapshot("calendar", [])
+    assert collectors.blackout("XAUUSD")[0] is False

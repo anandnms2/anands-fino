@@ -25,4 +25,7 @@ def fresh_db():
     db.Base.metadata.drop_all(db.get_engine())
     db.init_db()
     broker.set_broker(broker.MockBroker())
+    from app import collectors
+
+    collectors.save_snapshot("calendar", [])  # a loaded, empty calendar: no events, so no blackout
     yield
