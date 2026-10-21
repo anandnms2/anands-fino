@@ -48,7 +48,7 @@ def test_live_account_refused_when_env_is_demo_only_account_missing(fake, monkey
     monkeypatch.setenv("CTRADER_ACCOUNT_ID", "1111")  # the live account while CTRADER_ENV=demo
     get_settings.cache_clear()
     b = CTraderBroker(timeout=5)
-    with pytest.raises(BrokerError, match="is live but CTRADER_ENV is demo"):
+    with pytest.raises(BrokerError, match="is live but this is the demo venue"):
         b.account()
     b._drop()
 
@@ -162,7 +162,7 @@ def test_engine_cycle_reconcile_and_close_on_ctrader(fake, monkeypatch):
         assert all(0 < p.lots <= 50 for p in pos)
     assert all(m["payloadType"] != 2106 or m["payload"]["label"] == str(get_settings().magic) for m in fake.received)
     st = engine.state()
-    assert st["bridge"]["ok"] and st["account"]["demo"] and st["risk"]["open_count"] >= 1
+    d = st["venues"]["demo"]; assert d["connected"] and d["account"]["demo"] and d["open_count"] >= 1
     engine.reconcile()
     with session() as s:
         assert all(p.floating == 12.5 for p in s.scalars(select(Position).where(Position.status == "open")))

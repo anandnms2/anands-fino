@@ -31,7 +31,10 @@ async function act(path, body, ok) {
 window.act = act;
 window.askAct = (msg, path, ok) => { if (confirm(msg)) act(path, {}, ok); };
 
-const MODE_LABEL = { research: "Research", alerts: "Alerts", demo_auto: "Demo auto", live_approval: "Live: approve", live_auto: "Live: auto" };
+const VLABEL = { paper: "Paper", demo: "Demo", live: "Live" };
+const VDESC = { paper: "Simulated account on real prices. No broker needed.", demo: "cTrader demo account with demo funds.", live: "cTrader live account. Real money." };
+const vPill = (v) => v ? `<span class="pill ${v === "live" ? "warn" : "acc"}">${esc(VLABEL[v] || v)}</span>` : "";
+const sw = (on, label, path, body) => `<button class="btn sm ${on ? "pri" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" onclick="act('${path}',${body},'${esc(label)} ${on ? "off" : "on"}')">${on ? "ON" : "OFF"}</button>`;
 const STATUS = {
   executed: ["Executed", "buy"], pending_approval: ["Needs approval", "acc"], claude_no: ["Claude: NO", "none"], gate_blocked: ["Blocked by gate", "warn"],
   no_trade: ["No trade", "none"], alerted: ["Alert only", "acc"], error: ["Error", "red"], rejected: ["Rejected", "none"], expired: ["Expired", "none"],
@@ -50,14 +53,13 @@ function scoreBar(score) {
 async function desk() {
   const [st, latest, pos, appr, act_] = await Promise.all([
     api("/api/state"), api("/api/signals/latest"), api("/api/positions"), api("/api/approvals"), api("/api/activity?limit=25")]);
-  const a = st.account, r = st.risk, u = st.usage;
+  const r = st.risk, u = st.usage, V = st.venues;
   const h = st.halted || {};
   let html = `<header class="top">
     <div class="brand"><img src="/static/logo.png" alt=""><div><h1>Anands Fino</h1><div class="lab">Forex &amp; metals desk</div></div></div>
     <div class="tools">
-      <span class="pill ${st.bridge.ok ? "buy" : "red"}">${st.broker === "mt5" ? "MT5" : "cTrader"} ${st.bridge.ok ? "connected" : "offline"}</span>
-      ${a ? `<span class="pill ${a.demo ? "acc" : "warn"}">${a.demo ? "DEMO" : "REAL"} ${esc(a.login)}</span>` : ""}
       ${st.mock ? '<span class="pill warn">MOCK broker</span>' : ""}
+      ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
       <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
       <button class="btn pri" onclick="act('/api/cycle?force=true',{},'Cycle started')">Run cycle now</button>
       <button class="btn" onclick="act('/api/refresh',{},'Refreshing feeds')">Refresh feeds</button>
@@ -65,27 +67,37 @@ async function desk() {
 
   if (h.on) html += `<div class="banner" role="alert"><strong>Trading halted.</strong><span>${esc(h.reason)}</span>
     <button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
-  if (!st.bridge.ok) {
-    const ct = st.broker !== "mt5";
-    const needAuth = ct && /authoris|ctrader\/connect/i.test(st.bridge.error || "");
-    html += `<div class="banner warn"><strong>Broker not connected.</strong><span class="mute">${esc(st.bridge.error)}</span>
-      ${needAuth ? '<a class="btn pri sm" style="margin-left:auto" href="/ctrader/connect">Connect cTrader</a>' : ""}
-      <a class="btn sm" ${needAuth ? "" : 'style="margin-left:auto"'} href="/api/diagnostics">Diagnostics</a></div>`;
+  for (const v of Object.values(V)) {
+    if (v.halt && v.halt.on) html += `<div class="banner" role="alert"><strong>${esc(v.label)} venue paused.</strong><span>${esc(v.halt.reason)}</span>
+      <button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
+    if (v.connected === false) {
+      const needAuth = st.broker !== "mt5" && v.name !== "paper" && /authoris|ctrader\/connect/i.test(v.error || "");
+      html += `<div class="banner warn"><strong>${esc(v.label)} not connected.</strong><span class="mute">${esc(v.error)}</span>
+        ${needAuth ? '<a class="btn pri sm" style="margin-left:auto" href="/ctrader/connect">Connect cTrader</a>' : ""}
+        <a class="btn sm" ${needAuth ? "" : 'style="margin-left:auto"'} href="/api/diagnostics?venue=${v.name}">Diagnostics</a></div>`;
+    }
   }
   if (!st.feeds.claude_key) html += `<div class="banner warn"><strong>ANTHROPIC_API_KEY is not set.</strong><span class="mute">Claude cannot say YES, so no trade will pass.</span></div>`;
 
-  html += `<section class="card strip">
-    <div><div class="lab">Equity</div><div class="v">${a ? money(a.equity) : "–"}</div><div class="s">balance ${a ? money(a.balance) : "–"}</div></div>
-    <div><div class="lab">Today</div><div class="v ${a && a.day_pnl < 0 ? "bad" : "ok"}">${a ? money(a.day_pnl) : "–"}</div><div class="s">${a ? signed(a.day_pnl_pct, 2) + "%" : ""} (cap -${r.daily_loss_cap_pct}%)</div></div>
-    <div><div class="lab">Open risk</div><div class="v">${num(r.open_risk_pct, 2)}%</div><div class="s">of ${num(r.open_risk_cap_pct, 1)}% cap · ${r.open_count}/${r.max_open} trades</div></div>
-    <div><div class="lab">Next cycle</div><div class="v">${hm(st.next_cycle)}</div><div class="s">hourly, on candle close</div></div>
-  </section>`;
+  html += `<section class="card strip">${Object.values(V).map((v) => {
+    const a = v.account;
+    return `<div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>${esc(v.label)}</strong>
+        ${a ? `<span class="pill ${a.demo ? "acc" : "warn"}">${a.demo ? "DEMO" : "REAL"} ${esc(a.login)}</span>` : v.locked ? '<span class="pill none">locked</span>' : ""}</div>
+      <div class="mute" style="font-size:12px;margin:2px 0 8px">${esc(VDESC[v.name])}</div>
+      <div class="v">${a ? money(a.equity) : "–"}</div>
+      <div class="s">${a ? `today <span class="${a.day_pnl < 0 ? "bad" : "ok"}">${money(a.day_pnl)}</span> (${signed(a.day_pnl_pct, 2)}%) · ` : ""}${v.open_count}/${r.max_open} open${v.floating ? " · floating " + money(v.floating) : ""}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;align-items:center">
+        <span class="lab">Trade ${v.locked ? '<span class="mute" title="Set ALLOW_LIVE=true on the server">(ALLOW_LIVE)</span>' : sw(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}` ).replace("onclick=\"", v.name === "live" && !v.on ? "onclick=\"if(!confirm('Switch LIVE trading on? Real money on a real account.'))return;" : "onclick=\"")}</span>
+        <span class="lab">Auto-approve ${v.locked ? "" : sw(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`).replace("onclick=\"", v.name === "live" && !v.auto ? "onclick=\"if(!confirm('Auto-approve LIVE trades? Orders will go out without your click.'))return;" : "onclick=\"")}</span>
+        ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset</button>` : ""}
+      </div></div>`;
+  }).join("")}</section>`;
 
   if (appr.length) {
     html += `<section class="card"><div class="hd"><h2>Waiting for your approval</h2><span class="mute">Claude said YES, the gate passed</span></div>`;
     for (const s of appr) {
       const l = s.levels || {};
-      html += `<div class="appr"><div class="what"><strong>${esc(s.symbol)}</strong> ${biasPill(s.bias)}
+      html += `<div class="appr"><div class="what">${vPill(s.venue)} <strong>${esc(s.symbol)}</strong> ${biasPill(s.bias)}
         <span class="mono mute"> ${num(s.lots, 2)} lots · entry ${esc(l.entry)} · SL ${esc(l.sl)} · TP ${esc(l.tp)}</span>
         <div class="mute">${esc((s.claude || {}).thesis)}</div>
         <div class="mute mono">expires ${hm(s.expires_at)} · <a href="#/signal/${s.id}">details</a></div></div>
@@ -100,21 +112,21 @@ async function desk() {
     <td>${biasPill(s.bias)}</td>
     <td style="min-width:150px">${scoreBar(s.score)}<div class="mono mute" style="font-size:12px">${signed(s.score, 1)} · ${s.agree}/${s.available} agree</div></td>
     <td class="mono">${s.decision ? esc(s.decision) + (s.confidence != null ? " " + num(s.confidence, 2) : "") : "–"}</td>
-    <td>${stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc(s.reason)}</div></td>
+    <td>${(s.venues || []).length ? s.venues.map((x) => `<a href="#/signal/${x.id}">${vPill(x.venue)} ${stPill(x.status)}</a>`).join(" ") : stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc((s.venues || []).length ? "" : s.reason)}</div></td>
     <td class="mono mute">${hm(s.ts)}</td></tr>`).join("");
   html += `<div class="grid"><div class="col-main">
     <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree}+ factors agree</span></div>
       <div class="tw"><table><thead><tr><th>Symbol</th><th>Bias</th><th>Score</th><th>Claude</th><th>Outcome</th><th>At</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" class="mute">No cycle has run yet. Press “Run cycle now”.</td></tr>'}</tbody></table></div></section>`;
 
-  const prow = pos.open.map((p) => `<tr><td><strong>${esc(p.symbol)}</strong> <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
+  const prow = pos.open.map((p) => `<tr><td>${vPill(p.venue)} <strong>${esc(p.symbol)}</strong> <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
     <td class="mono">${num(p.lots, 2)}</td><td class="mono">${esc(p.entry)}</td><td class="mono">${esc(p.sl)} / ${esc(p.tp)}</td>
     <td class="mono ${p.floating < 0 ? "bad" : "ok"}">${money(p.floating)}</td><td class="mono">${money(p.risk_usd)}</td>
-    <td class="r"><button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.ticket}','Closed')">Close</button></td></tr>`).join("");
+    <td class="r"><button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></td></tr>`).join("");
   html += `<section class="card"><div class="hd"><h2>Open positions</h2></div><div class="tw"><table><thead><tr><th>Position</th><th>Lots</th><th>Entry</th><th>SL / TP</th><th>Floating</th><th>Risk</th><th></th></tr></thead>
     <tbody>${prow || '<tr><td colspan="7" class="mute">Nothing open.</td></tr>'}</tbody></table></div></section>`;
 
-  const crow = pos.closed.map((p) => `<tr><td>${esc(p.symbol)} <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
+  const crow = pos.closed.map((p) => `<tr><td>${vPill(p.venue)} ${esc(p.symbol)} <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
     <td class="mono">${esc(p.entry)} → ${esc(p.close_price)}</td><td class="mono ${p.profit < 0 ? "bad" : "ok"}">${money(p.profit)}</td><td class="mono mute">${hm(p.closed_at)}</td></tr>`).join("");
   if (crow) html += `<section class="card"><div class="hd"><h2>Recently closed</h2></div><div class="tw"><table style="min-width:420px"><tbody>${crow}</tbody></table></div></section>`;
 
@@ -122,18 +134,20 @@ async function desk() {
     <span class="${x.level === "error" ? "bad" : x.level === "warn" ? "warn" : ""}">${x.symbol ? "<strong>" + esc(x.symbol) + "</strong> " : ""}${esc(x.text)}${x.signal_id ? ` <a href="#/signal/${x.signal_id}">view</a>` : ""}</span></div>`).join("") || '<div class="pad mute">No activity yet.</div>'}</section>
     </div><div class="col-side">`;
 
-  html += `<section class="card"><div class="hd"><h2>Autonomy</h2><span class="mute mono">${esc(MODE_LABEL[st.mode])}</span></div><div class="seg">${st.modes.map((m) => {
-    const live = m.startsWith("live"), dis = live && !st.allow_live;
-    return `<button aria-pressed="${m === st.mode}" ${dis ? "disabled title=\"Set ALLOW_LIVE=true on the server to enable\"" : ""} onclick="${live ? "if(!confirm('Switch to a LIVE mode? Real money on a real account.'))return;" : ""}act('/api/mode',{mode:'${m}'},'Mode set')">${esc(MODE_LABEL[m])}</button>`;
-  }).join("")}</div>
-    <div class="pad">${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}</div></section>`;
+  html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
+    <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>
+    ${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}</div></section>`;
 
   const meter = (label, val, cap, txt, hot) => `<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${label}</span><span class="mono mute">${txt}</span></div>
     <div class="meter ${hot ? "hot" : ""}"><i style="width:${Math.min(100, cap ? (val / cap) * 100 : 0)}%"></i></div></div>`;
-  html += `<section class="card"><div class="hd"><h2>Risk limits</h2></div>
-    ${meter("Daily loss", Math.max(0, -(a ? a.day_pnl_pct : 0)), r.daily_loss_cap_pct, `${num(Math.max(0, -(a ? a.day_pnl_pct : 0)), 2)}% / ${r.daily_loss_cap_pct}%`, a && -a.day_pnl_pct > r.daily_loss_cap_pct * 0.7)}
-    ${meter("Open risk", r.open_risk_pct, r.open_risk_cap_pct, `${num(r.open_risk_pct, 2)}% / ${num(r.open_risk_cap_pct, 1)}%`, r.open_risk_pct > r.open_risk_cap_pct * 0.7)}
-    ${meter("Loss streak", r.loss_streak, r.max_loss_streak, `${r.loss_streak} / ${r.max_loss_streak}`, r.loss_streak >= r.max_loss_streak - 1)}
+  html += `<section class="card"><div class="hd"><h2>Risk limits</h2><span class="mono mute">per venue</span></div>
+    ${Object.values(V).filter((v) => v.on || v.open_count).map((v) => {
+      const dl = v.account ? Math.max(0, -v.account.day_pnl_pct) : 0, orp = v.open_risk_pct || 0;
+      return `<div class="row" style="border-top:1px solid var(--line)"><strong>${esc(v.label)}</strong></div>
+        ${meter("Daily loss", dl, r.daily_loss_cap_pct, `${num(dl, 2)}% / ${r.daily_loss_cap_pct}%`, dl > r.daily_loss_cap_pct * 0.7)}
+        ${meter("Open risk", orp, r.open_risk_cap_pct, `${num(orp, 2)}% / ${num(r.open_risk_cap_pct, 1)}%`, orp > r.open_risk_cap_pct * 0.7)}
+        ${meter("Loss streak", v.loss_streak, r.max_loss_streak, `${v.loss_streak} / ${r.max_loss_streak}`, v.loss_streak >= r.max_loss_streak - 1)}`;
+    }).join("") || '<div class="pad mute">No venue is on.</div>'}
     <div class="row"><span>Risk per trade</span><span class="mono">${r.risk_per_trade_pct}%</span></div></section>`;
 
   html += `<section class="card"><div class="hd"><h2>Events (36h)</h2></div>${st.events.map((e) => `<div class="row"><span><span class="pill ${e.impact === "High" ? "warn" : "none"}">${esc(e.currency)}</span> ${esc(e.title)}</span>
@@ -170,7 +184,7 @@ async function detail(id) {
   const s = await api("/api/signal/" + id);
   const l = s.levels || {}, c = s.claude || {}, g = s.gate || {}, p = s.position;
   let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>${esc(s.symbol)} ${biasPill(s.bias)}</h1>
-    <div class="lab">Signal #${s.id} · ${esc(s.candle_time)} · ${esc(MODE_LABEL[s.mode] || s.mode)}</div></div></div>
+    <div class="lab">Signal #${s.id} · ${esc(s.candle_time)} · ${esc(VLABEL[s.venue] || "analysis")}${s.mode ? " · " + esc(s.mode.split(":")[1]) : ""}</div></div></div>
     <div class="tools">${stPill(s.status)}<a class="btn" href="#/">Back to desk</a></div></header>
     <p class="mute" style="margin:0">${esc(s.reason)}</p>
     <div class="grid"><div class="col-main">

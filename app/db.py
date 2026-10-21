@@ -47,12 +47,14 @@ class Signal(Base):
     lots: Mapped[float] = mapped_column(Float, default=0.0)
     ticket: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mode: Mapped[str] = mapped_column(String(16), default="")
+    venue: Mapped[str] = mapped_column(String(8), default="", index=True)  # paper | demo | live | "" (analysis only)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Position(Base):
     __tablename__ = "positions"
-    ticket: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ticket: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    venue: Mapped[str] = mapped_column(String(8), primary_key=True, default="demo")  # tickets of different accounts may coincide
     signal_id: Mapped[int | None] = mapped_column(ForeignKey("signals.id"), nullable=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     side: Mapped[str] = mapped_column(String(8))
@@ -133,7 +135,22 @@ def session():
 
 
 def init_db():
-    Base.metadata.create_all(get_engine())
+    eng = get_engine()
+    Base.metadata.create_all(eng)
+    # create_all does not alter existing tables: add the venue columns to databases created before venues existed
+    from sqlalchemy import inspect, text
+
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table, default in (("signals", ""), ("positions", "demo")):
+            if "venue" not in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN venue VARCHAR(8) NOT NULL DEFAULT '{default}'"))
+        # tickets of different accounts can coincide, so the key of positions becomes (ticket, venue) (Postgres; SQLite is dev only)
+        if eng.dialect.name == "postgresql":
+            pk = insp.get_pk_constraint("positions")
+            if pk.get("constrained_columns") == ["ticket"]:
+                conn.execute(text(f'ALTER TABLE positions DROP CONSTRAINT "{pk["name"]}"'))
+                conn.execute(text("ALTER TABLE positions ADD PRIMARY KEY (ticket, venue)"))
 
 
 def kv_get(key: str, default=None):

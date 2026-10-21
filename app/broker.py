@@ -274,24 +274,30 @@ class MockBroker:
         return {"retcode": RETCODE_DONE, "price": p["price_open"], "comment": "mock"}
 
 
-_broker = None
+_brokers: dict = {}
 
 
-def get_broker():
-    global _broker
-    if _broker is None:
+def get_broker(venue: str = "demo"):
+    """The broker connection behind a trading venue: paper (simulated), demo (cTrader demo) or live (cTrader live)."""
+    if venue == "paper":
+        from .paper import get_paper
+
+        return get_paper()
+    if venue not in _brokers:
         s = get_settings()
         if s.mt5_mock:
-            _broker = MockBroker()
+            _brokers[venue] = MockBroker()
         elif s.broker == "mt5":
-            _broker = RemoteBroker(s.mt5_host, s.mt5_port)
+            _brokers[venue] = RemoteBroker(s.mt5_host, s.mt5_port)
         else:
             from .ctrader import CTraderBroker
 
-            _broker = CTraderBroker()
-    return _broker
+            _brokers[venue] = CTraderBroker(env=venue)
+    return _brokers[venue]
 
 
-def set_broker(b) -> None:
-    global _broker
-    _broker = b
+def set_broker(b, venue: str = "demo") -> None:
+    if b is None:
+        _brokers.pop(venue, None)
+    else:
+        _brokers[venue] = b

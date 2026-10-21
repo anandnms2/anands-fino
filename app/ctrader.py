@@ -110,8 +110,9 @@ def current_access_token() -> str:
 
 # ------------------------------------------------------------------ broker
 class CTraderBroker:
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, env: str | None = None):
         self.timeout = timeout
+        self.env = env or get_settings().ctrader_env
         self._lock = threading.RLock()        # connect / reconnect
         self._plock = threading.Lock()        # pending requests and waiters
         self._ws = None
@@ -145,7 +146,7 @@ class CTraderBroker:
         cfg = get_settings()
         if cfg.ctrader_url:
             return cfg.ctrader_url
-        return f"wss://{'live' if cfg.ctrader_env == 'live' else 'demo'}.ctraderapi.com:5036"
+        return f"wss://{'live' if self.env == 'live' else 'demo'}.ctraderapi.com:5036"
 
     def _send(self, payload_type: int, payload: dict, msg_id: str | None = None) -> str:
         msg_id = msg_id or uuid.uuid4().hex[:16]
@@ -298,13 +299,15 @@ class CTraderBroker:
         accounts = res.get("ctidTraderAccount") or []
         if not accounts:
             raise BrokerError("this cTrader ID has no trading accounts. Open a cTrader account at the broker first")
-        want_live = cfg.ctrader_env == "live"
+        want_live = self.env == "live"
+        wanted = (cfg.ctrader_live_account_id if want_live else cfg.ctrader_demo_account_id) or (cfg.ctrader_account_id if cfg.ctrader_env == self.env else "")
+        wanted = wanted.strip()
         pick = None
-        if cfg.ctrader_account_id:
-            pick = next((a for a in accounts if str(a.get("ctidTraderAccountId")) == cfg.ctrader_account_id.strip()
-                         or str(a.get("traderLogin")) == cfg.ctrader_account_id.strip()), None)
+        if wanted:
+            pick = next((a for a in accounts if str(a.get("ctidTraderAccountId")) == wanted
+                         or str(a.get("traderLogin")) == wanted), None)
             if pick is None:
-                raise BrokerError(f"CTRADER_ACCOUNT_ID {cfg.ctrader_account_id} not found. Available: "
+                raise BrokerError(f"cTrader account {wanted} not found. Available: "
                                   + ", ".join(f"{a.get('traderLogin')} ({'live' if a.get('isLive') else 'demo'})" for a in accounts))
         else:
             pick = next((a for a in accounts if bool(a.get("isLive")) == want_live), None)
@@ -312,7 +315,7 @@ class CTraderBroker:
                 raise BrokerError(f"no {'live' if want_live else 'demo'} cTrader account on this cTrader ID. Found: "
                                   + ", ".join(f"{a.get('traderLogin')} ({'live' if a.get('isLive') else 'demo'})" for a in accounts))
         if bool(pick.get("isLive")) != want_live:
-            raise BrokerError(f"account {pick.get('traderLogin')} is {'live' if pick.get('isLive') else 'demo'} but CTRADER_ENV is {cfg.ctrader_env}")
+            raise BrokerError(f"account {pick.get('traderLogin')} is {'live' if pick.get('isLive') else 'demo'} but this is the {self.env} venue")
         self._ctid = int(pick["ctidTraderAccountId"])
         self._account_info = pick
         self._request(ACCOUNT_AUTH_REQ, {"ctidTraderAccountId": self._ctid, "accessToken": token})

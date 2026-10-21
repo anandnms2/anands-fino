@@ -12,10 +12,10 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from . import collectors, engine, sentiment
+from . import collectors, engine, sentiment, venues
 from .broker import BrokerError, get_broker
 from .config import get_settings
-from .db import Activity, Position, Signal, init_db, iso, log, session
+from .db import Activity, Position, Signal, init_db, iso, kv_set, log, session
 
 STATIC = Path(__file__).parent / "static"
 scheduler = BackgroundScheduler(timezone="UTC")
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
             scheduler.add_job(job(name, fn), "date", run_date=None)
         if cfg.run_cycle_on_start:
             scheduler.add_job(job("cycle", lambda: engine.run_cycle(force=True)), "date", run_date=None)
-        log(f"Anands Fino started. Level {engine.get_mode()}, symbols {', '.join(cfg.symbol_list)}"
+        log(f"Anands Fino started. Venues on: {', '.join(venues.enabled()) or 'none'}, symbols {', '.join(cfg.symbol_list)}"
             + (" (MOCK broker)" if cfg.mt5_mock else ""), "info")
     yield
     if scheduler.running:
@@ -95,7 +95,7 @@ def sig_row(s: Signal, full: bool = False) -> dict:
     d = {
         "id": s.id, "ts": iso(s.ts), "symbol": s.symbol, "candle_time": s.candle_time, "bias": s.bias, "score": s.score,
         "agree": s.agree, "available": s.available, "status": s.status, "reason": s.reason, "lots": s.lots, "ticket": s.ticket,
-        "levels": s.levels, "mode": s.mode, "expires_at": iso(s.expires_at),
+        "levels": s.levels, "mode": s.mode, "venue": s.venue, "expires_at": iso(s.expires_at),
         "confidence": (s.claude or {}).get("confidence"), "decision": (s.claude or {}).get("decision"),
     }
     if full:
@@ -107,7 +107,7 @@ def pos_row(p: Position) -> dict:
     return {"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl, "tp": p.tp,
             "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price, "status": p.status,
             "opened_at": iso(p.opened_at), "closed_at": iso(p.closed_at), "profit": p.profit, "close_price": p.close_price,
-            "signal_id": p.signal_id}
+            "signal_id": p.signal_id, "venue": p.venue}
 
 
 # ---------------------------------------------------------------- API
@@ -125,7 +125,14 @@ def api_state():
 def api_latest():
     from .db import latest_signals_per_symbol
 
-    return [sig_row(s) for s in latest_signals_per_symbol(get_settings().symbol_list)]
+    out = []
+    with session() as ses:
+        for s in latest_signals_per_symbol(get_settings().symbol_list):
+            row = sig_row(s)
+            same = ses.scalars(select(Signal).where(Signal.cycle_id == s.cycle_id, Signal.symbol == s.symbol, Signal.venue != "").order_by(Signal.id)).all()
+            row["venues"] = [{"venue": x.venue, "status": x.status, "id": x.id, "lots": x.lots, "reason": x.reason} for x in same]
+            out.append(row)
+    return out
 
 
 @app.get("/api/signals")
@@ -207,12 +214,28 @@ def api_resume():
     return engine.halted()
 
 
-@app.post("/api/mode")
-def api_mode(body: dict = Body(...)):
+@app.post("/api/venue/{name}")
+def api_venue(name: str, body: dict = Body(...)):
+    """Switch a venue on or off and set auto-approve. Send {"on": bool} and/or {"auto": bool}."""
     try:
-        return {"mode": engine.set_mode(str(body.get("mode", "")))}
+        on = body.get("on")
+        auto = body.get("auto")
+        return venues.set_venue(name, None if on is None else bool(on), None if auto is None else bool(auto))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/paper/reset")
+def api_paper_reset():
+    from .paper import get_paper
+
+    if engine.open_positions_view("paper"):
+        raise HTTPException(400, "Close the open paper positions first")
+    get_paper().reset()
+    venues.set_loss_streak("paper", 0)
+    kv_set("day_start:paper", None)
+    log("Paper account reset", "warn")
+    return {"ok": True}
 
 
 @app.post("/api/approve/{sid}")
@@ -232,21 +255,25 @@ def api_reject(sid: int):
         raise HTTPException(400, str(e))
 
 
-@app.post("/api/close/{ticket}")
-def api_close(ticket: int):
+@app.post("/api/close/{venue}/{ticket}")
+def api_close(venue: str, ticket: int):
+    if venue not in venues.VENUES:
+        raise HTTPException(400, "unknown venue")
     try:
-        engine.close_position(ticket)
+        engine.close_position(ticket, venue)
         return {"status": "closed"}
     except BrokerError as e:
         raise HTTPException(400, str(e))
 
 
 @app.get("/api/diagnostics")
-def api_diagnostics():
-    """Read-only check of the MT5 bridge, symbol names and data feeds. Run this first after deploying."""
+def api_diagnostics(venue: str = ""):
+    """Read-only check of a venue's connection, symbol names and data feeds. Run this first after deploying."""
     cfg = get_settings()
-    broker = get_broker()
-    out = {"mock": cfg.mt5_mock, "broker": cfg.broker, "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port} if cfg.broker == "mt5" else {"env": cfg.ctrader_env}, "symbols": {}}
+    v = venue or next((x for x in ("demo", "paper", "live") if venues.venue_cfg(x)["on"]), "demo")
+    broker = get_broker(v)
+    out = {"mock": cfg.mt5_mock, "venue": v, "feed": cfg.paper_feed if v == "paper" else None, "broker": cfg.broker,
+           "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port} if cfg.broker == "mt5" else {"env": v if v != "paper" else "paper"}, "symbols": {}}
     try:
         broker.connect()
         a = broker.account()
@@ -298,9 +325,10 @@ def ctrader_callback(request: Request, code: str = "", error: str = ""):
         ctrader.exchange_code(code, _redirect_uri(request))
     except BrokerError as e:
         raise HTTPException(400, str(e))
-    broker = get_broker()
-    if hasattr(broker, "_drop"):
-        broker._drop()  # reconnect with the new token on the next call
+    for v in ("demo", "live"):
+        broker = get_broker(v)
+        if hasattr(broker, "_drop"):
+            broker._drop()  # reconnect with the new token on the next call
     log("cTrader access granted", "info")
     return RedirectResponse("/")
 

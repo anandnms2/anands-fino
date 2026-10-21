@@ -38,10 +38,20 @@ class Settings(BaseSettings):
     ctrader_client_id: str = ""
     ctrader_client_secret: str = ""
     ctrader_env: str = "demo"          # demo or live; must match the account used
-    ctrader_account_id: str = ""       # optional: trader login or ctid when the cTrader ID has several accounts
+    ctrader_account_id: str = ""       # optional: trader login or ctid when the cTrader ID has several accounts (applies to CTRADER_ENV)
+    ctrader_demo_account_id: str = ""  # optional, per venue
+    ctrader_live_account_id: str = ""
     ctrader_access_token: str = ""     # optional: normally obtained through /ctrader/connect and kept in the database
     ctrader_refresh_token: str = ""
     ctrader_url: str = ""              # override of the WebSocket endpoint (tests)
+
+    # paper trading: real prices from a free feed, simulated account. The dashboard switch overrides paper_mode.
+    paper_mode: bool = False
+    paper_feed: str = "yahoo"          # yahoo (no key) or twelvedata
+    twelvedata_api_key: str = ""
+    paper_balance: float = 10000.0
+    paper_spreads: str = ""            # JSON, price units, e.g. {"XAUUSD": 0.35}
+    paper_price_ttl_s: int = 60
 
     # MT5 bridge (MT5 under Wine, reached over RPyC on the stack's private network)
     mt5_host: str = "mt5"

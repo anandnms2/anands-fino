@@ -8,7 +8,8 @@ from sqlalchemy import select
 
 from . import collectors, scoring
 from .broker import ACCOUNT_TRADE_MODE_DEMO, BrokerError, get_broker
-from .config import LIVE_MODES, MODES, Settings, get_settings
+from . import venues as V
+from .config import Settings, get_settings
 from .db import NewsItem, Position, Signal, iso, kv_get, kv_set, log, session, utcnow
 from .decision import decide
 from .features import compute_technicals
@@ -19,26 +20,17 @@ MIN_CANDLES = 260
 
 
 # ---------------------------------------------------------------- small state helpers
-def get_mode() -> str:
-    return kv_get("mode") or get_settings().mode
-
-
-def set_mode(mode: str) -> str:
-    cfg = get_settings()
-    if mode not in MODES:
-        raise ValueError(f"mode must be one of {MODES}")
-    if mode in LIVE_MODES and not cfg.allow_live:
-        raise ValueError("live modes are disabled. Set ALLOW_LIVE=true in the environment first.")
-    kv_set("mode", mode)
-    log(f"Autonomy level changed to {mode}", "warn")
-    return mode
-
-
 def halted() -> dict:
     return kv_get("halted") or {"on": False, "reason": "", "since": None}
 
 
-def halt(reason: str) -> None:
+def halt(reason: str, venue: str | None = None) -> None:
+    """Stop everything (kill switch) or, with a venue, pause only that venue."""
+    if venue:
+        V.set_halt(venue, reason)
+        log(f"{V.LABEL[venue].upper()} VENUE PAUSED: {reason}", "error")
+        notify(f"Anands Fino paused the {venue} venue: {reason}")
+        return
     kv_set("halted", {"on": True, "reason": reason, "since": iso(utcnow())})
     log(f"TRADING HALTED: {reason}", "error")
     notify(f"Anands Fino halted: {reason}")
@@ -46,7 +38,9 @@ def halt(reason: str) -> None:
 
 def resume() -> None:
     kv_set("halted", {"on": False, "reason": "", "since": None})
-    kv_set("loss_streak", 0)
+    for v in V.VENUES:
+        V.set_halt(v, None)
+        V.set_loss_streak(v, 0)
     log("Trading resumed by user", "warn")
 
 
@@ -73,21 +67,14 @@ def market_open(now: datetime | None = None) -> bool:
     return True
 
 
-def day_start_equity(account: dict) -> float:
-    today = utcnow().strftime("%Y-%m-%d")
-    row = kv_get("day_start")
-    if not row or row.get("day") != today:
-        row = {"day": today, "equity": account["equity"]}
-        kv_set("day_start", row)
-    return row["equity"]
-
-
-def open_positions_view() -> list[dict]:
+def open_positions_view(venue: str | None = None) -> list[dict]:
     with session() as s:
-        rows = s.scalars(select(Position).where(Position.status == "open")).all()
+        q = select(Position).where(Position.status == "open")
+        if venue:
+            q = q.where(Position.venue == venue)
         return [{"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl,
                  "tp": p.tp, "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price,
-                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id} for p in rows]
+                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue} for p in s.scalars(q).all()]
 
 
 def account_is_demo(account: dict) -> bool:
@@ -119,6 +106,24 @@ def run_cycle(force: bool = False) -> dict:
         _lock.release()
 
 
+def _venue_ready(v: str):
+    """Connect a venue and check its account type. Returns (broker, account) or None, logging why not."""
+    try:
+        b = get_broker(v)
+        b.connect()
+        acct = b.account()
+    except BrokerError as e:
+        log(f"{V.LABEL[v]} venue skipped: {e}", "error")
+        return None
+    if v == "live" and account_is_demo(acct):
+        log("Live venue skipped: the connected account is a DEMO account", "error")
+        return None
+    if v != "live" and not account_is_demo(acct):
+        log(f"{V.LABEL[v]} venue skipped: the connected account is a REAL account", "error")
+        return None
+    return b, acct
+
+
 def _run_cycle(force: bool) -> dict:
     cfg = get_settings()
     cycle_id = utcnow().strftime("%Y%m%d%H") + "-" + uuid.uuid4().hex[:4]
@@ -129,20 +134,38 @@ def _run_cycle(force: bool) -> dict:
         log("Cycle skipped: forex market is closed", "info")
         return {"ok": False, "note": "market closed"}
 
-    broker = get_broker()
-    try:
-        broker.connect()
-        sync_offset(broker, cfg)
-        account = broker.account()
-    except BrokerError as e:
-        log(f"Cycle aborted: {e}", "error")
-        return {"ok": False, "note": str(e)}
+    # venues that may trade this cycle, each with its own broker, account and book
+    vctx = {}
+    for v in V.enabled():
+        if V.venue_halt(v)["on"]:
+            log(f"{V.LABEL[v]} venue is paused: {V.venue_halt(v)['reason']}", "warn")
+            continue
+        r = _venue_ready(v)
+        if r:
+            b, acct = r
+            vctx[v] = {"broker": b, "account": acct, "start_eq": V.day_start_equity(v, acct),
+                       "positions": open_positions_view(v), "auto": V.venue_cfg(v)["auto"]}
 
-    start_eq = day_start_equity(account)
-    mode = get_mode()
+    # one set of candles for the analysis: a trading venue's broker if there is one, else demo or the paper feed
+    order = [v for v in ("demo", "live", "paper") if v in vctx] or ["demo", "paper"]
+    broker, data_v = None, None
+    for v in order:
+        try:
+            b = vctx[v]["broker"] if v in vctx else get_broker(v)
+            b.connect()
+            sync_offset(b, cfg)
+            b.account()
+            broker, data_v = b, v
+            break
+        except BrokerError as e:
+            log(f"Price source {V.LABEL[v]} unavailable: {e}", "warn")
+    if broker is None:
+        log("Cycle aborted: no price source is reachable", "error")
+        return {"ok": False, "note": "no price source"}
+
     macro = (collectors.snapshot("macro") or {}).get("data")
     cot = (collectors.snapshot("cot") or {}).get("data")
-    positions = open_positions_view()
+    all_positions = open_positions_view()
 
     # 1. technicals for every symbol
     techs, infos, ticks, closes, candle_times, stale = {}, {}, {}, {}, {}, {}
@@ -194,9 +217,13 @@ def _run_cycle(force: bool) -> dict:
             v["weight"] = weights.get(k, 0)
         comb = scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree)
 
-        sig = Signal(cycle_id=cycle_id, symbol=sym, candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
-                     agree=comb["agree"], available=comb["available"], factors=factors, mode=mode,
-                     context={"closes": closes[sym]})
+        def mk(venue: str = "") -> Signal:
+            return Signal(cycle_id=cycle_id, symbol=sym, candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
+                          agree=comb["agree"], available=comb["available"], factors=factors, venue=venue,
+                          mode=(f"{venue}:{'auto' if vctx[venue]['auto'] else 'manual'}" if venue in vctx else ""),
+                          context={"closes": closes[sym]})
+
+        sig = mk()
         if comb["bias"] == "NONE":
             why = []
             if abs(comb["score"]) < cfg.score_threshold:
@@ -204,58 +231,95 @@ def _run_cycle(force: bool) -> dict:
             if comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
-            levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
-            sig.levels = levels
-            with session() as s:
-                s.add(sig)
-                s.commit()
-                sid = sig.id
+            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
+            sid = _save(sig)
             log(f"{sym}: {sig.reason}", "info", sym, sid)
             results[sym] = sig.status
             continue
 
         levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
         sig.levels = levels
-        spread_price = tick["ask"] - tick["bid"]
+        if not vctx:
+            sig.status, sig.reason = "alerted", "No trading venue is switched on: signal recorded, no order"
+            sid = _save(sig)
+            text = f"{sym} {comb['bias']} entry {levels['entry']}, stop {levels['sl']}, target {levels['tp']}"
+            log(f"Signal (no venue on): {text}", "trade", sym, sid)
+            notify(f"Signal: {text}")
+            results[sym] = sig.status
+            continue
+
         blk = collectors.blackout(sym)
         data_ok = not stale.get(sym, False)
-        gate_args = dict(cfg=cfg, symbol=sym, bias=comb["bias"], levels=levels, account=account, sym_info=info,
-                         spread_price=spread_price, open_positions=positions, day_start_equity=start_eq,
-                         loss_streak=int(kv_get("loss_streak", 0) or 0), halted=False, blackout=blk, data_ok=data_ok)
-        pre = evaluate(confidence=None, **gate_args)
-        sig.gate = pre
-        if not pre["ok"]:
-            sig.status, sig.reason = "gate_blocked", "Blocked by the risk gate: " + pre["reason"]
-            _save(sig)
-            log(f"{sym}: {comb['bias']} score {comb['score']:+.0f} blocked. {pre['reason']}", "warn", sym, sig.id)
-            results[sym] = sig.status
+        gate_args, passed, outcome, vlevels = {}, [], [], {}
+        for v, c in vctx.items():
+            try:
+                vb = c["broker"]
+                vinfo, vtick = vb.symbol_info(cfg.broker_symbol(sym)), vb.tick(cfg.broker_symbol(sym))
+            except BrokerError as e:
+                log(f"{sym} on {V.LABEL[v]}: {e}", "error", sym)
+                continue
+            # venues quote slightly different prices (Yahoo vs cTrader, say): shift the levels onto this venue's own price
+            side_px = lambda tk: tk["ask"] if comb["bias"] == "BUY" else tk["bid"]  # noqa: E731
+            delta = side_px(vtick) - side_px(tick)
+            if abs(delta) > 0.5 * levels["atr"]:
+                vs = mk(v)
+                vs.levels = levels
+                vs.status, vs.reason = "gate_blocked", f"Blocked: {V.LABEL[v]} quotes {delta:+g} away from the analysis price (more than 0.5 ATR)"
+                sid = _save(vs)
+                log(f"{sym} on {V.LABEL[v]}: {vs.reason}", "warn", sym, sid)
+                outcome.append(f"{v}:gate_blocked")
+                continue
+            d = vinfo["digits"]
+            vlev = {**levels, "entry": round(levels["entry"] + delta, d), "sl": round(levels["sl"] + delta, d), "tp": round(levels["tp"] + delta, d)}
+            vlevels[v] = vlev
+            gate_args[v] = dict(cfg=cfg, symbol=sym, bias=comb["bias"], levels=vlev, account=c["account"], sym_info=vinfo,
+                                spread_price=vtick["ask"] - vtick["bid"], open_positions=c["positions"], day_start_equity=c["start_eq"],
+                                loss_streak=V.loss_streak(v), halted=False, blackout=blk, data_ok=data_ok)
+            pre = evaluate(confidence=None, **gate_args[v])
+            if pre["ok"]:
+                passed.append(v)
+            else:
+                vs = mk(v)
+                vs.levels, vs.gate = vlevels[v], pre
+                vs.status, vs.reason = "gate_blocked", "Blocked by the risk gate: " + pre["reason"]
+                sid = _save(vs)
+                log(f"{sym} on {V.LABEL[v]}: {comb['bias']} score {comb['score']:+.0f} blocked. {pre['reason']}", "warn", sym, sid)
+                outcome.append(f"{v}:gate_blocked")
+        if not passed:
+            results[sym] = ", ".join(outcome) or "no venue reachable"
             continue
 
-        # Claude has the final say
-        ctx = _claude_context(sym, comb, factors, levels, tech, closes[sym], news24, cb_items, macro, cot, positions, account, start_eq, info)
-        sig.context = {**sig.context, "claude_input": {k: v for k, v in ctx.items() if k != "recent_closes"}}
+        # Claude has the final say, once per symbol, and every venue shares the answer
+        v0 = passed[0]
+        ctx = _claude_context(sym, comb, factors, levels, tech, closes[sym], news24, cb_items, macro, cot, vctx[v0]["positions"],
+                              vctx[v0]["account"], vctx[v0]["start_eq"], info)
+        claude_input = {k: v for k, v in ctx.items() if k != "recent_closes"}
         dec = decide(ctx)
-        sig.claude = dec
         if dec["decision"] != "YES":
+            sig.claude, sig.context = dec, {**sig.context, "claude_input": claude_input}
             sig.status = "claude_no"
             sig.reason = "Claude said no" + (f": {dec['against']}" if dec.get("against") else f" ({dec['error']})" if dec.get("error") else "")
-            _save(sig)
-            log(f"{sym}: Claude declined {comb['bias']}. {dec.get('against') or dec.get('error', '')}", "info", sym, sig.id)
+            sid = _save(sig)
+            log(f"{sym}: Claude declined {comb['bias']}. {dec.get('against') or dec.get('error', '')}", "info", sym, sid)
             results[sym] = sig.status
             continue
-        fin = evaluate(confidence=dec["confidence"], **gate_args)
-        sig.gate = fin
-        if not fin["ok"]:
-            sig.status, sig.reason = "gate_blocked", "Blocked by the risk gate: " + fin["reason"]
-            _save(sig)
-            log(f"{sym}: Claude said yes at {dec['confidence']:.2f} but the gate blocked it. {fin['reason']}", "warn", sym, sig.id)
-            results[sym] = sig.status
-            continue
-
-        sig.lots = fin["lots"]
-        _save(sig)
-        results[sym] = _dispatch(sig.id, mode)
-        positions = open_positions_view()
+        for v in passed:
+            vs = mk(v)
+            vs.levels, vs.claude = vlevels[v], dec
+            vs.context = {**vs.context, "claude_input": claude_input}
+            fin = evaluate(confidence=dec["confidence"], **gate_args[v])
+            vs.gate = fin
+            if not fin["ok"]:
+                vs.status, vs.reason = "gate_blocked", "Blocked by the risk gate: " + fin["reason"]
+                sid = _save(vs)
+                log(f"{sym} on {V.LABEL[v]}: Claude said yes at {dec['confidence']:.2f} but the gate blocked it. {fin['reason']}", "warn", sym, sid)
+                outcome.append(f"{v}:gate_blocked")
+                continue
+            vs.lots = fin["lots"]
+            sid = _save(vs)
+            outcome.append(f"{v}:{_dispatch(sid)}")
+            vctx[v]["positions"] = open_positions_view(v)
+        results[sym] = ", ".join(outcome)
     return {"ok": True, "cycle_id": cycle_id, "results": results}
 
 
@@ -263,10 +327,11 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _save(sig: Signal) -> None:
+def _save(sig: Signal) -> int:
     with session() as s:
         s.add(sig) if sig.id is None else s.merge(sig)
         s.commit()
+        return sig.id
 
 
 def _claude_context(sym, comb, factors, levels, tech, closes, news24, cb_items, macro, cot, positions, account, start_eq, info) -> dict:
@@ -293,24 +358,14 @@ def _claude_context(sym, comb, factors, levels, tech, closes, news24, cb_items, 
 
 
 # ---------------------------------------------------------------- execution
-def _dispatch(signal_id: int, mode: str) -> str:
+def _dispatch(signal_id: int) -> str:
+    """Send a cleared signal to its venue: straight to the broker (auto-approve) or into the approval queue."""
     cfg = get_settings()
     with session() as s:
         sig = s.get(Signal, signal_id)
-        side, sym = sig.bias, sig.symbol
-        text = f"{sym} {side} {sig.lots:g} lots, entry {sig.levels['entry']}, stop {sig.levels['sl']}, target {sig.levels['tp']}"
-        if mode == "research":
-            sig.status, sig.reason = "alerted", "Research mode: signal recorded, no order"
-            s.commit()
-            log(f"Signal (research): {text}", "trade", sym, signal_id)
-            return sig.status
-        if mode == "alerts":
-            sig.status, sig.reason = "alerted", "Alerts mode: place it yourself"
-            s.commit()
-            log(f"Signal (alert): {text}", "trade", sym, signal_id)
-            notify(f"Signal: {text}")
-            return sig.status
-        if mode == "live_approval":
+        venue, side, sym = sig.venue, sig.bias, sig.symbol
+        text = f"[{V.LABEL[venue]}] {sym} {side} {sig.lots:g} lots, entry {sig.levels['entry']}, stop {sig.levels['sl']}, target {sig.levels['tp']}"
+        if not V.venue_cfg(venue)["auto"]:
             sig.status = "pending_approval"
             sig.expires_at = utcnow() + timedelta(minutes=cfg.approval_ttl_min)
             sig.reason = "Waiting for your approval"
@@ -322,14 +377,15 @@ def _dispatch(signal_id: int, mode: str) -> str:
 
 
 def execute_signal(signal_id: int) -> str:
-    """Final checks and the market order. Refuses a real account unless live trading was enabled on purpose."""
+    """Final checks and the market order on the signal's venue. Demo and Paper refuse a real account; Live refuses a demo one."""
     cfg = get_settings()
-    broker = get_broker()
     with session() as s:
         sig = s.get(Signal, signal_id)
         if sig is None or sig.status in ("executed", "rejected", "expired"):
             return "ignored"
-        sym, side, levels, mode = sig.symbol, sig.bias, dict(sig.levels), get_mode()
+        venue = sig.venue or "demo"
+        sym, side, levels = sig.symbol, sig.bias, dict(sig.levels)
+        broker = get_broker(venue)
         try:
             broker.connect()
             account = broker.account()
@@ -340,8 +396,12 @@ def execute_signal(signal_id: int) -> str:
             return _fail(s, sig, f"broker unavailable: {e}")
 
         real = not account_is_demo(account)
-        if real and not (cfg.allow_live and mode in LIVE_MODES):
-            return _fail(s, sig, "refused: the connected account is a REAL account and live trading is not enabled")
+        if venue == "live" and not cfg.allow_live:
+            return _fail(s, sig, "refused: live trading is not enabled (ALLOW_LIVE)")
+        if venue == "live" and not real:
+            return _fail(s, sig, "refused: the Live venue is connected to a DEMO account")
+        if venue != "live" and real:
+            return _fail(s, sig, f"refused: the connected account is a REAL account but this is the {V.LABEL[venue]} venue")
 
         # re-check against the price right now
         price = tick["ask"] if side == "BUY" else tick["bid"]
@@ -350,9 +410,9 @@ def execute_signal(signal_id: int) -> str:
             return _fail(s, sig, f"price moved {moved:g} since the signal (more than 0.25 ATR)")
         live_levels = {**levels, "entry": price}
         fin = evaluate(cfg=cfg, symbol=sym, bias=side, levels=live_levels, confidence=(sig.claude or {}).get("confidence", 0.0),
-                       account=account, sym_info=info, spread_price=tick["ask"] - tick["bid"], open_positions=open_positions_view(),
-                       day_start_equity=day_start_equity(account), loss_streak=int(kv_get("loss_streak", 0) or 0), halted=halted()["on"],
-                       blackout=collectors.blackout(sym), data_ok=True)
+                       account=account, sym_info=info, spread_price=tick["ask"] - tick["bid"], open_positions=open_positions_view(venue),
+                       day_start_equity=V.day_start_equity(venue, account), loss_streak=V.loss_streak(venue),
+                       halted=halted()["on"] or V.venue_halt(venue)["on"], blackout=collectors.blackout(sym), data_ok=True)
         sig.gate = fin
         if not fin["ok"]:
             return _fail(s, sig, "gate re-check failed: " + fin["reason"], status="gate_blocked")
@@ -363,11 +423,11 @@ def execute_signal(signal_id: int) -> str:
         ticket = int(res["order"])
         fill = float(res.get("price") or price)
         sig.status, sig.ticket, sig.lots = "executed", ticket, fin["lots"]
-        sig.reason = f"Order filled at {fill:g}"
+        sig.reason = f"Order filled at {fill:g} ({V.LABEL[venue]})"
         s.add(Position(ticket=ticket, signal_id=sig.id, symbol=sym, side=side, lots=fin["lots"], entry=fill, sl=levels["sl"],
-                       tp=levels["tp"], risk_usd=fin["risk_usd"], last_price=fill))
+                       tp=levels["tp"], risk_usd=fin["risk_usd"], last_price=fill, venue=venue))
         s.commit()
-        msg = f"{sym} {side} {fin['lots']:g} lots filled at {fill:g}, stop {levels['sl']}, target {levels['tp']} (#{ticket})"
+        msg = f"[{V.LABEL[venue]}] {sym} {side} {fin['lots']:g} lots filled at {fill:g}, stop {levels['sl']}, target {levels['tp']} (#{ticket})"
         log("Order filled: " + msg, "trade", sym, sig.id)
         notify("Order filled: " + msg)
         return "executed"
@@ -376,7 +436,7 @@ def execute_signal(signal_id: int) -> str:
 def _fail(s, sig: Signal, reason: str, status: str = "error") -> str:
     sig.status, sig.reason = status, reason
     s.commit()
-    log(f"{sig.symbol}: {reason}", "error" if status == "error" else "warn", sig.symbol, sig.id)
+    log(f"{sig.symbol} ({sig.venue or '-'}): {reason}", "error" if status == "error" else "warn", sig.symbol, sig.id)
     return status
 
 
@@ -402,29 +462,47 @@ def reject(signal_id: int) -> None:
         log(f"{sig.symbol}: signal rejected by you", "info", sig.symbol, sig.id)
 
 
-def close_position(ticket: int) -> None:
+def close_position(ticket: int, venue: str = "demo") -> None:
     cfg = get_settings()
-    broker = get_broker()
+    broker = get_broker(venue)
     broker.connect()
     broker.close_position(ticket, cfg.magic, cfg.deviation)
-    log(f"Close sent for #{ticket}", "trade")
+    log(f"Close sent for #{ticket} ({V.LABEL[venue]})", "trade")
     reconcile()
 
 
 # ---------------------------------------------------------------- reconcile and kill switch
 def reconcile() -> None:
-    """Sync open positions with the broker, book closed trades, and trip the kill switch when limits are hit."""
+    """Sync open positions with each venue's broker, book closed trades, and pause a venue when its limits are hit."""
     cfg = get_settings()
-    broker = get_broker()
+    expire_stale()
+    for v in V.VENUES:
+        if not (V.venue_cfg(v)["on"] or open_positions_view(v)):
+            continue
+        if v == "live" and not cfg.allow_live and not open_positions_view(v):
+            continue
+        _reconcile_venue(v, cfg)
+
+
+def expire_stale() -> None:
+    with session() as s:
+        for sig in s.scalars(select(Signal).where(Signal.status == "pending_approval")).all():
+            if sig.expires_at and _aware(sig.expires_at) < utcnow():
+                sig.status, sig.reason = "expired", "Approval window passed"
+        s.commit()
+
+
+def _reconcile_venue(v: str, cfg: Settings) -> None:
+    broker = get_broker(v)
     try:
         broker.connect()
         live = {p["ticket"]: p for p in broker.positions(cfg.magic)}
         account = broker.account()
     except BrokerError:
         return
-    events, streak_now = [], int(kv_get("loss_streak", 0) or 0)
+    events, streak_now = [], V.loss_streak(v)
     with session() as s:
-        for pos in s.scalars(select(Position).where(Position.status == "open")).all():
+        for pos in s.scalars(select(Position).where(Position.status == "open", Position.venue == v)).all():
             lp = live.get(pos.ticket)
             if lp:
                 pos.floating, pos.last_price = float(lp["profit"] + lp.get("swap", 0.0)), float(lp["price_current"])
@@ -435,40 +513,53 @@ def reconcile() -> None:
             pos.status, pos.closed_at, pos.profit, pos.floating = "closed", utcnow(), float(profit), 0.0
             pos.close_price = float(out[-1]["price"]) if out else pos.last_price
             streak_now = streak_now + 1 if profit < 0 else 0
-            events.append((f"{pos.symbol} #{pos.ticket} closed at {pos.close_price:g}, result {profit:+.2f}", pos.symbol, pos.signal_id))
-        # expire stale approvals
-        for sig in s.scalars(select(Signal).where(Signal.status == "pending_approval")).all():
-            if sig.expires_at and _aware(sig.expires_at) < utcnow():
-                sig.status, sig.reason = "expired", "Approval window passed"
+            events.append((f"[{V.LABEL[v]}] {pos.symbol} #{pos.ticket} closed at {pos.close_price:g}, result {profit:+.2f}", pos.symbol, pos.signal_id))
         s.commit()
     # write to the journal only after the transaction above is closed
     if events:
-        kv_set("loss_streak", streak_now)
+        V.set_loss_streak(v, streak_now)
     for text, sym, sid in events:
         log(text, "trade", sym, sid)
         notify(text)
-    if events and streak_now >= cfg.max_loss_streak:
-        halt(f"{streak_now} losses in a row")
-    start_eq = day_start_equity(account)
-    if start_eq and (account["equity"] - start_eq) / start_eq * 100 <= -cfg.daily_loss_cap_pct and not halted()["on"]:
-        halt(f"daily loss cap of {cfg.daily_loss_cap_pct:g}% reached")
+    if events and streak_now >= cfg.max_loss_streak and not V.venue_halt(v)["on"]:
+        halt(f"{streak_now} losses in a row", v)
+    start_eq = V.day_start_equity(v, account)
+    if start_eq and (account["equity"] - start_eq) / start_eq * 100 <= -cfg.daily_loss_cap_pct and not V.venue_halt(v)["on"]:
+        halt(f"daily loss cap of {cfg.daily_loss_cap_pct:g}% reached", v)
 
 
 # ---------------------------------------------------------------- state for the UI
+def venue_state(v: str) -> dict:
+    cfg = get_settings()
+    vc = V.venue_cfg(v)
+    positions = open_positions_view(v)
+    out = {"name": v, "label": V.LABEL[v], "on": vc["on"], "auto": vc["auto"], "locked": V.locked(v),
+           "halt": V.venue_halt(v), "account": None, "error": "", "connected": None,
+           "loss_streak": V.loss_streak(v), "open_count": len(positions),
+           "open_risk_usd": sum(p["risk_usd"] for p in positions), "positions": positions,
+           "floating": sum(p["floating"] for p in positions)}
+    if V.locked(v) and not positions:
+        return out
+    if not vc["on"] and not positions:
+        return out
+    try:
+        b = get_broker(v)
+        b.connect()
+        acct = b.account()
+        out["connected"] = True
+        start_eq = V.day_start_equity(v, acct)
+        out["account"] = {"login": acct["login"], "server": acct["server"], "demo": account_is_demo(acct), "currency": acct["currency"],
+                          "balance": acct["balance"], "equity": acct["equity"], "day_start_equity": start_eq,
+                          "day_pnl": acct["equity"] - start_eq,
+                          "day_pnl_pct": ((acct["equity"] - start_eq) / start_eq * 100) if start_eq else 0.0}
+        out["open_risk_pct"] = (out["open_risk_usd"] / acct["balance"] * 100) if acct["balance"] else 0.0
+    except BrokerError as e:
+        out["connected"], out["error"] = False, str(e)
+    return out
+
+
 def state() -> dict:
     cfg = get_settings()
-    broker = get_broker()
-    acct, bridge, acct_err = None, False, ""
-    try:
-        broker.connect()
-        acct = broker.account()
-        bridge = True
-    except BrokerError as e:
-        acct_err = str(e)
-    positions = open_positions_view()
-    start_eq = day_start_equity(acct) if acct else 0.0
-    open_risk = sum(p["risk_usd"] for p in positions)
-    streak = int(kv_get("loss_streak", 0) or 0)
     from .llm import usage
 
     now = utcnow()
@@ -477,16 +568,11 @@ def state() -> dict:
         nxt += timedelta(hours=1)
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
-        "now": iso(now), "mode": get_mode(), "modes": MODES, "allow_live": cfg.allow_live, "halted": halted(),
-        "mock": cfg.mt5_mock, "broker": cfg.broker, "bridge": {"ok": bridge, "error": acct_err},
-        "account": None if not acct else {
-            "login": acct["login"], "server": acct["server"], "demo": account_is_demo(acct), "currency": acct["currency"],
-            "balance": acct["balance"], "equity": acct["equity"], "day_start_equity": start_eq,
-            "day_pnl": acct["equity"] - start_eq, "day_pnl_pct": ((acct["equity"] - start_eq) / start_eq * 100) if start_eq else 0.0},
-        "risk": {"open_risk_usd": open_risk, "open_risk_pct": (open_risk / acct["balance"] * 100) if acct and acct["balance"] else 0.0,
-                 "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "daily_loss_cap_pct": cfg.daily_loss_cap_pct,
-                 "open_count": len(positions), "max_open": cfg.max_open, "loss_streak": streak, "max_loss_streak": cfg.max_loss_streak,
-                 "risk_per_trade_pct": cfg.risk_per_trade_pct},
+        "now": iso(now), "allow_live": cfg.allow_live, "halted": halted(),
+        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed,
+        "venues": {v: venue_state(v) for v in V.VENUES},
+        "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
+                 "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct},
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

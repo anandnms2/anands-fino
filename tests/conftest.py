@@ -24,6 +24,7 @@ def fresh_db():
     db.get_engine()
     db.Base.metadata.drop_all(db.get_engine())
     db.init_db()
+    broker._brokers.clear()
     broker.set_broker(broker.MockBroker())
     from app import collectors
 
