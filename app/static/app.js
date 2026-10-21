@@ -57,7 +57,7 @@ const S = { an: {}, venue: localStorage.getItem("fv") || "paper", sym: localStor
   st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
 const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
 const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
-const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/settings" ? "settings" : "terminal"; };
+const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/strategies" ? "strategies" : h === "#/settings" ? "settings" : "terminal"; };
 const $ = (id) => document.getElementById(id);
 
 function startStream() {
@@ -109,7 +109,7 @@ function barLive() {
 function renderBar() {
   const st = S.st; if (!st) return;
   const V = st.venues, v = V[S.venue] || {}, a = v.account, r = st.risk, pg = pageName();
-  const nav = [["terminal", "#/", "Terminal"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
+  const nav = [["terminal", "#/", "Terminal"], ["reports", "#/reports", "Reports"], ["strategies", "#/strategies", "Strategies"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
   $bar.innerHTML = `<div class="bar-in"><div class="bar-r1"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
     <nav class="bnav" aria-label="Pages">${nav.map(([k, h, l]) => `<a href="${h}" class="${pg === k || (pg === "signal" && k === "terminal") ? "on" : ""}">${l}</a>`).join("")}</nav>
     <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')">${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div></div>
@@ -601,6 +601,27 @@ async function specs() {
   $app.innerHTML = html;
 }
 
+
+/* ------------------------------------------------------------ strategies and backtest */
+let btTimer = null;
+async function strategiesPage() {
+  const d = await api("/api/backtest"), st = S.st, rows = (d.rows || []).slice().sort((a, b) => a.symbol.localeCompare(b.symbol) || a.tf - b.tf);
+  const run = d.state === "running", live = d.live_set || {};
+  const pf = (t) => (t ? `${t.n} trades · ${num(t.win, 0)}% win · ${t.exp >= 0 ? "+" : ""}${num(t.exp, 2)}R · PF ${num(t.pf, 2)}` : "–");
+  let h = pageHead("Strategies", "Setups are tested on past candles with the spread paid, chosen on the first 60% and judged on the last 40% they never saw",
+    `<button class="btn pri" ${run ? "disabled" : ""} onclick="act('/api/backtest/run',{},'Backtest started')">${run ? "Running " + d.done + "/" + d.total : "Run backtest now"}</button>`);
+  h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Trade only proven setups</b><div class="mute" style="font-size:12px">On: a symbol trades only with a setup that earned on data it was not tuned on, on that setup's candle size. Off: the old score-only entries.</div></div>${swBtn(d.strategy_mode, "Strategy mode", "/api/strategy-mode", `{on:${!d.strategy_mode}}`, d.strategy_mode ? "Turn strategy mode OFF? The old score-only entries (which lost money) trade again." : "")}</div>
+    <div class="note">Status: <b>${esc(d.state)}</b>${d.finished ? " · finished " + hm(d.finished) : ""}${d.error ? " · " + esc(d.error) : ""}. Live now: <b class="acc">${Object.keys(live).length}</b> symbol(s) cleared to trade${Object.keys(live).length ? ": " + Object.entries(live).map(([k, v]) => `${esc(k)} ${esc(v.strategy)} ${v.tf}m`).join(", ") : ". Nothing has been proven yet, so nothing trades in strategy mode until a backtest finds a setup that holds up"}.</div>
+    <p class="mute" style="font-size:12px;margin:8px 0 0">A backtest is evidence, not a promise: markets change, and testing many setups always turns up some that look good by luck. That is why a setup must also earn on the unseen 40%, with enough trades. Re-run it weekly; results for the old score-style entries on the same data are shown for comparison.</p></div></section>`;
+  h += `<section class="card"><div class="tw"><table style="min-width:980px"><thead><tr><th>Symbol</th><th>Candles</th><th>Best setup (picked on the first 60%)</th><th>First 60%</th><th>Unseen 40%</th><th>Old entries, unseen</th><th class="r">Verdict</th></tr></thead><tbody>
+    ${rows.map((r) => { const b = r.best; return `<tr><td><b>${esc(r.symbol)}</b></td><td class="mono">${r.tf}m</td><td>${b ? `${esc(b.strategy)} · stop ${b.stop_k} ATR · target ${b.rr}× · ${b.session === "all" ? "all hours" : "London/NY"}` : '<span class="mute">nothing earned on the first 60%</span>'}</td>
+      <td class="mono">${b ? pf(b.train) : "–"}</td><td class="mono ${b && b.test.exp > 0 ? "ok" : "bad"}">${b ? pf(b.test) : "–"}</td><td class="mono mute">${pf(r.baseline_test)}</td>
+      <td class="r">${r.ok ? '<span class="pill buy">PROVEN</span>' : '<span class="pill none">not proven</span>'}</td></tr>`; }).join("") || '<tr><td colspan="7" class="mute">No results yet. Press Run backtest now: it takes a few minutes and runs on the server.</td></tr>'}</tbody></table></div></section>`;
+  $app.innerHTML = h;
+  clearTimeout(btTimer);
+  if (run) btTimer = setTimeout(() => { if (pageName() === "strategies") render(); }, 4000);
+}
+
 /* ------------------------------------------------------------ router */
 async function ensureSt() {
   if (S.st) { renderBar(); api("/api/state").then((d) => { S.st = d; renderBar(); }).catch(() => {}); return; }
@@ -616,6 +637,7 @@ async function render() {
     if (pg === "signal") { await ensureSt(); await detail(location.hash.match(/(\d+)/)[1]); }
     else if (pg === "reports") { await ensureSt(); await reports(); }
     else if (pg === "specs") { await ensureSt(); await specs(); }
+    else if (pg === "strategies") { await ensureSt(); await strategiesPage(); }
     else if (pg === "settings") await settings();
     else await terminal();
   } catch (e) {

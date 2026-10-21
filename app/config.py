@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     spread_stop_limit: float = 0.25
     min_confidence: float = 0.6
     max_loss_streak: int = 5
+    loss_cooldown_min: int = 60        # after a losing trade on a symbol and direction, no new trade there for this long (0 = off)
     blackout_min: int = 15
 
     # timing
@@ -226,6 +227,7 @@ TUNABLES: dict[str, tuple] = {
     "daily_loss_cap_pct": ("risk", "Daily loss limit (%)", 0.1, 20, 0.1, False),
     "max_open": ("risk", "Max open trades", 1, 30, 1, True),
     "max_loss_streak": ("risk", "Losses in a row before pause", 1, 30, 1, True),
+    "loss_cooldown_min": ("risk", "Sit out a symbol and direction after a loss (min, 0 = off)", 0, 720, 15, True),
     "blackout_min": ("risk", "News blackout around high-impact events (min)", 0, 120, 5, True),
     "min_confidence": ("claude", "Claude confidence needed", 0, 1, 0.05, False),
     "claude_cooldown_min": ("claude", "Claude re-asked after NO (min)", 0, 240, 5, True),

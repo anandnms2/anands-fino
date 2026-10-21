@@ -39,7 +39,7 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
         add("Claude confidence", True, "checked after Claude decides")
     else:
         add(f"Confidence {confidence:.2f}, minimum {cfg.min_confidence:.2f}", confidence >= cfg.min_confidence)
-    add(f"Reward to risk {rr:.2f}, minimum {cfg.min_rr:.2f}", rr >= cfg.min_rr)
+    add(f"Reward to risk {rr:.2f}, minimum {cfg.min_rr:.2f}", rr >= cfg.min_rr - 0.01)   # price rounding must not fail an exact 1.5 against 1.5
     add("No high-impact event within the blackout window", not blackout[0], blackout[1])
     add(f"Open trades {len(open_positions)} of {cfg.max_open}", len(open_positions) < cfg.max_open)
     add("No open position on this symbol", all(p["symbol"] != symbol for p in open_positions))

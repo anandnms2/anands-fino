@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 
-from . import collectors, scoring
+from . import collectors, scoring, strategies
 from .broker import ACCOUNT_TRADE_MODE_DEMO, BrokerError, get_broker
 from . import venues as V
 from .config import risk_overrides, tune_table, Settings, get_settings, tf_label
@@ -236,8 +236,10 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
     cot = (collectors.snapshot("cot") or {}).get("data")
 
     # 1. technicals for every symbol
-    techs, infos, ticks, closes, candle_times, stale, stf = {}, {}, {}, {}, {}, {}, {}
+    techs, infos, ticks, closes, candle_times, stale, stf, dfs = {}, {}, {}, {}, {}, {}, {}, {}
     now_ = utcnow()
+    strat_mode = strategy_mode()
+    strats = kv_get("strategies") or {} if strat_mode else {}
     for sym in cfg.symbol_list:
         bsym = cfg.broker_symbol(sym)
         try:
@@ -247,7 +249,8 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             log(f"{sym}: {e}", "error", sym)
             continue
         spread = max(tick["ask"] - tick["bid"], 0.0)
-        t, done = tf, False
+        st_ = strats.get(sym)
+        t, done = (st_["tf"] if st_ else tf), False   # a symbol with a proven strategy trades on the candle size it was proven on
         while True:   # auto chart: climb to a bigger candle until one candle moves several spreads, else the costs eat every trade
             try:
                 df = broker.rates(bsym, 3500 if t <= 1 else 500 if t >= 30 else 1500, t)
@@ -260,7 +263,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
                 break
             tech = compute_technicals(closed, info["digits"], t)
             nxt = next((x for x in V.TIMEFRAMES if x > t and x <= max(cfg.auto_tf_max, tf)), None)
-            if cfg.auto_tf and nxt and spread > 0 and tech["atr"] < cfg.auto_tf_atr_spreads * spread:
+            if cfg.auto_tf and not st_ and nxt and spread > 0 and tech["atr"] < cfg.auto_tf_atr_spreads * spread:
                 t = nxt
                 continue
             done = True
@@ -272,7 +275,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         last_open = closed["time"].iloc[-1]
         age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
         stale[sym] = (not force) and age_min > 4 * t + (12 if data_is_paper else 2)   # free feeds lag, metals most
-        techs[sym], stf[sym] = tech, t
+        techs[sym], stf[sym], dfs[sym] = tech, t, closed
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
         candle_times[sym] = iso(last_open.to_pydatetime())
@@ -291,6 +294,16 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         tech, info, tick = techs[sym], infos[sym], ticks[sym]
         tf = stf[sym]
         factors, comb = prep[sym]
+        strat_note, st_ = None, strats.get(sym)
+        if strat_mode:   # trade only what has been proven on past data, on the candle size it was proven on
+            if st_ is None:
+                comb, strat_note = {**comb, "bias": "NONE"}, "no strategy has been proven on past data for this symbol (see the Strategies page)"
+            else:
+                sg_ = int(strategies.signal(dfs[sym], st_["strategy"], st_["session"]).iloc[-1])
+                if sg_ == 0:
+                    comb, strat_note = {**comb, "bias": "NONE"}, f"{st_['strategy']} sees no setup on the last {tf_label(tf)} candle"
+                else:
+                    comb = {**comb, "bias": "BUY" if sg_ > 0 else "SELL"}
 
         def mk(venue: str = "") -> Signal:
             return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(tf), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
@@ -308,14 +321,24 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
                 why.append(f"{comb['agree']} of {comb['available']} factors agree ({pct:.0f}%), {cfg.min_agree_pct:g}% needed")
             elif not cfg.min_agree_pct and comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
-            sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
+            sig.status, sig.reason = "no_trade", "No trade: " + (strat_note or " and ".join(why))
             sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
             sid = _save(sig)
             results[sym] = sig.status
             continue
 
-        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
+        if st_:
+            levels = _strategy_levels(comb["bias"], st_, tech, tick, info["digits"])
+        else:
+            levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.stop_floor_spreads or 1.05 / cfg.spread_stop_limit, cfg.max_tp_atr, cfg.min_rr + 0.2)
         sig.levels = levels
+        if comb["bias"] != "NONE" and cfg.loss_cooldown_min:   # after a loss on this symbol and direction, sit out: the same setup keeps being stopped out
+            with session() as s_:
+                lost = s_.scalars(select(Position).where(Position.symbol == sym, Position.side == comb["bias"], Position.status == "closed", Position.profit < 0,
+                                                       Position.closed_at >= utcnow() - timedelta(minutes=cfg.loss_cooldown_min))).first()
+            if lost is not None:
+                results[sym] = "loss_cooldown"
+                continue
         if not vctx:
             sig.status, sig.reason = "alerted", "No trading venue is switched on: signal recorded, no order"
             sid = _save(sig)
@@ -415,6 +438,21 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             vctx[v]["positions"] = open_positions_view(v)
         results[sym] = ", ".join(outcome)
     return results
+
+
+def strategy_mode() -> bool:
+    """On unless switched off: trade only setups proven on past data. Off is the old score-only mode."""
+    return kv_get("strategy_mode") is not False
+
+
+def _strategy_levels(side: str, st: dict, tech: dict, tick: dict, digits: int) -> dict:
+    buy = side == "BUY"
+    entry = tick["ask"] if buy else tick["bid"]
+    a = tech["atr"]
+    stop = st["stop_k"] * a
+    sl, tp = (entry - stop, entry + st["rr"] * stop) if buy else (entry + stop, entry - st["rr"] * stop)
+    return {"entry": round(entry, digits), "sl": round(sl, digits), "tp": round(tp, digits), "atr": round(a, digits), "stop": round(stop, digits), "rr": st["rr"],
+            "strategy": st["strategy"]}
 
 
 def _repeat_block(sym: str, venue: str, tf: int, gate: dict) -> bool:
@@ -978,7 +1016,7 @@ def state() -> dict:
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},
-        "tune": tune_table(),
+        "tune": tune_table(), "strategy_mode": strategy_mode(), "strategies": kv_get("strategies") or {},
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

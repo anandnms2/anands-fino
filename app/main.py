@@ -53,6 +53,12 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(job("calendar", collectors.fetch_calendar), "interval", minutes=60, max_instances=1, coalesce=True)
         scheduler.add_job(job("macro", collectors.fetch_macro), "interval", hours=6, max_instances=1, coalesce=True)
         scheduler.add_job(job("cot", collectors.fetch_cot), "interval", hours=12, max_instances=1, coalesce=True)
+        from . import backtest
+        from datetime import datetime as _dt, timedelta as _td
+
+        scheduler.add_job(backtest.run_all, "interval", days=7, id="backtest_weekly", replace_existing=True)
+        if backtest.status().get("state") in ("never run", "running", "failed"):   # first start, or a run cut short by a restart
+            scheduler.add_job(backtest.run_all, "date", run_date=_dt.now() + _td(seconds=45), id="backtest_first", replace_existing=True)
         scheduler.start()
         from .paper import start_quotes
         start_quotes()
@@ -564,6 +570,30 @@ def api_tune(body: dict = Body(...)):
     if changed:
         log("Rules set by hand: " + "; ".join(changed), "warn")
     return {"ok": True, "custom": cur}
+
+
+@app.get("/api/backtest")
+def api_backtest():
+    from . import backtest
+
+    st = backtest.status()
+    return {**st, "strategy_mode": engine.strategy_mode(), "live_set": kv_get("strategies") or {}}
+
+
+@app.post("/api/backtest/run")
+def api_backtest_run():
+    """Replay every strategy on the last weeks or months of real candles (spread paid) and keep what also earns on data it was not tuned on."""
+    from . import backtest
+
+    return {"started": backtest.run_all()}
+
+
+@app.post("/api/strategy-mode")
+def api_strategy_mode(body: dict = Body(...)):
+    on = bool(body.get("on"))
+    kv_set("strategy_mode", on)
+    log("Strategy mode " + ("ON: only setups proven on past data trade" if on else "OFF: the old score-only entries trade"), "warn")
+    return {"strategy_mode": on}
 
 
 @app.post("/api/paper/balance")
