@@ -176,7 +176,8 @@ class PaperBroker:
         """Value of one unit of the profit currency in USD, from the feed's own prices."""
         if ccy == "USD":
             return 1.0
-        for pair, inv in ((f"{ccy}USD", False), (f"USD{ccy}", True)):
+        pairs = [(f"USD{ccy}", True), (f"{ccy}USD", False)] if ccy in ("JPY", "CHF", "CAD") else [(f"{ccy}USD", False), (f"USD{ccy}", True)]
+        for pair, inv in pairs:
             try:
                 t = self.tick(pair)
             except BrokerError:

@@ -83,7 +83,8 @@ def profit_rate(broker, info: dict, account: dict) -> float | None:
     if not pc or not ac or pc == ac:
         return 1.0
     cfg = get_settings()
-    for pair, inv in ((pc + ac, False), (ac + pc, True)):
+    usd_base = ac == "USD" and pc in ("JPY", "CHF", "CAD")  # market convention quotes these as USDJPY etc.
+    for pair, inv in (((ac + pc, True), (pc + ac, False)) if usd_base else ((pc + ac, False), (ac + pc, True))):
         try:
             t = broker.tick(cfg.broker_symbol(pair))
         except BrokerError:
