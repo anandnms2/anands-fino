@@ -271,3 +271,14 @@ def test_strategy_mode_trades_only_proven_setups_and_respects_loss_cooldown(monk
     engine.run_cycle(force=True)
     assert len(brk.get_broker("demo").orders) == n      # the same symbol and direction is sat out after the loss
     kv_set("strategy_mode", False)
+
+
+def test_strategy_trades_keep_their_tested_exits():
+    from app.db import Position, Signal, session, utcnow
+
+    with session() as s:
+        a = Signal(symbol="EURUSD", bias="BUY", status="executed", venue="demo", levels={"strategy": "pullback", "entry": 1, "sl": 0.9, "tp": 1.2})
+        b = Signal(symbol="EURUSD", bias="BUY", status="executed", venue="demo", levels={"entry": 1, "sl": 0.9, "tp": 1.2})
+        s.add_all([a, b]); s.commit()
+        ia, ib = a.id, b.id
+    assert engine.is_strategy_trade(ia) and not engine.is_strategy_trade(ib) and not engine.is_strategy_trade(None)

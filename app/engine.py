@@ -803,6 +803,9 @@ def watch_positions() -> None:
         news24 = list(s.scalars(select(NewsItem).where(NewsItem.published >= utcnow() - timedelta(hours=24))))
     for p in opens:
         v, sym, tk = p["venue"], p["symbol"], p["ticket"]
+        if is_strategy_trade(p.get("signal_id")):
+            _watch.pop((v, tk), None)
+            continue
         try:
             broker = get_broker(v)
             broker.connect()
@@ -881,6 +884,20 @@ def expire_stale() -> None:
 _trail_fail: dict = {}
 
 
+_strat_sig: dict = {}
+
+
+def is_strategy_trade(signal_id) -> bool:
+    """Trades opened by a proven strategy keep the exact exits it was tested with: no trailing stop, no early reversal exit (neither was in the test)."""
+    if not signal_id:
+        return False
+    if signal_id not in _strat_sig:
+        with session() as s:
+            sig = s.get(Signal, signal_id)
+            _strat_sig[signal_id] = bool(sig and (sig.levels or {}).get("strategy"))
+    return _strat_sig[signal_id]
+
+
 def _trail_plan(pos, lp: dict, cfg: Settings):
     """(new stop, new target, why) when the trailing stop should move, else None. R is the first stop distance."""
     if kv_get("trail") is False or (kv_get("trail") is None and not cfg.trail_on):
@@ -924,7 +941,7 @@ def _reconcile_venue(v: str, cfg: Settings) -> None:
             lp = live.get(pos.ticket)
             if lp:
                 pos.floating, pos.last_price = float(lp["profit"] + lp.get("swap", 0.0)), float(lp["price_current"])
-                plan = _trail_plan(pos, lp, cfg)
+                plan = None if is_strategy_trade(pos.signal_id) else _trail_plan(pos, lp, cfg)
                 if plan and time.time() - _trail_fail.get((v, pos.ticket), 0) > 60:
                     trails.append((pos.ticket, pos.symbol, lp["symbol"], pos.sl0 or pos.sl, *plan))
                 continue

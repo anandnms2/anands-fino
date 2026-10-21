@@ -22,6 +22,8 @@ MAX_BARS = 48                    # a trade still open after this many candles is
 MIN_TRAIN, MIN_TEST = 25, 12
 # what a setup must show on the unseen 40% before live trading may use it
 OK_TEST_EXPECTANCY, OK_TEST_PF = 0.05, 1.15
+MIN_TEST_STRONG = 30            # a setup judged on fewer unseen trades than this is too thin to trust
+MIN_ROBUST = 0.4                # and at least this share of ALL tested settings must also be positive on the unseen part: an edge that exists only for one lucky setting is noise
 
 
 def fetch_history(symbol: str, tf: int) -> pd.DataFrame:
@@ -115,7 +117,7 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
         t = best["test"]
-        row["ok"] = t["n"] >= MIN_TEST and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF
+        row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and row["share_positive_test"] >= MIN_ROBUST
     return row
 
 
