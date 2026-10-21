@@ -105,6 +105,8 @@ class Settings(BaseSettings):
 
     # timing
     cycle_delay_seconds: int = 15
+    timeframe_min: int = 3             # candle size the whole analysis runs on (1, 2, 3, 4, 5, 10, 15, 30 or 60); one cycle per candle
+    claude_cooldown_min: int = 15      # after Claude says NO to a symbol and direction, do not ask again for this long
     run_cycle_on_start: bool = False
     scheduler_enabled: bool = True
 
@@ -149,3 +151,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def tf_label(minutes: int | None = None) -> str:
+    m = minutes or get_settings().timeframe_min
+    return f"H{m // 60}" if m % 60 == 0 else f"M{m}"

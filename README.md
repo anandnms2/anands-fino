@@ -4,7 +4,7 @@ AI research and signal desk for forex and metals, executing through the cTrader 
 FreeLLMAPI does the volume work (tagging news). **Claude gives the final YES or NO on every trade.**
 Hard risk limits live in code and Claude cannot override them.
 
-## Flow (hourly, on candle close)
+## Flow (one cycle per candle, default M3 = every 3 minutes; set `TIMEFRAME_MIN`)
 data → technicals → research (FRED, CFTC, calendar, news) → weighted score (7 factors, at least 60% of them must agree, `MIN_AGREE_PCT`) → risk gate → **Claude YES/NO** → gate re-check → execute / ask approval → journal.
 
 ## Deploy on Coolify (cTrader, the default)
@@ -39,6 +39,11 @@ A venue pauses by itself after `MAX_LOSS_STREAK` losses in a row or a 2% daily l
 **Paper prices.** `PAPER_FEED=yahoo` (no key, unofficial) or `twelvedata` (`TWELVEDATA_API_KEY`; check that the free plan covers XAU/XAG). Fills are simulated with a typical spread and no slippage, and a stop wins when one candle touches both stop and target, so paper results are optimistic. Paper levels are shifted onto the paper feed's own price (a venue quoting more than 0.5 ATR away is skipped). `Reset` on the Paper card restores the starting balance.
 
 **Initial switches** come from the environment (`PAPER_MODE`, `MODE`: `demo_auto` switches Demo on; `live_approval` / `live_auto` switch Live on with manual / auto approval when `ALLOW_LIVE=true`); after that the dashboard switches win and are stored in the database.
+
+## Schedule
+Trading cycle every `TIMEFRAME_MIN` minutes (default 3, on candle close, 15 s after the boundary) · open trades checked every 30 s · news every 5 min · calendar hourly · macro 6 h · COT 12 h. Trend confirmation uses H1 on M3 charts (H4 on M30/H1). After Claude says NO to a symbol and direction it is not asked again for `CLAUDE_COOLDOWN_MIN` (15) minutes, which keeps the Claude call count down. Old no-trade rows (3 days) and journal lines (14 days) are pruned automatically.
+
+**M3 caveats.** Spread and commission eat far more of a 3-minute stop than an hourly one, so the spread check will block many setups and live results will be worse than paper. The free Twelve Data plan cannot refresh four symbols every 3 minutes (800 calls a day), so it refreshes about every 8 minutes; Yahoo (1-minute data, resampled) has no such cap.
 
 ## Risk gate (code, not model)
 0.5% risk per trade, 2% daily loss cap, max 3 open trades, min R:R 1.5, spread ≤ 10% of stop, Claude confidence ≥ 0.6, halt after 5 straight losses, ±15 min news blackout, one open trade per symbol, no same-direction trades in correlated pairs, lots rounded down to the broker step.

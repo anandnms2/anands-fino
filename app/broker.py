@@ -114,8 +114,9 @@ class RemoteBroker:
         return r
 
     def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
-        """H1 candles in UTC, oldest first. The last row is the candle still forming."""
-        expr = "(lambda r: None if r is None else r.tolist())(mt5.copy_rates_from_pos(%r, %d, 0, %d))" % (symbol, TIMEFRAME_H1, count)
+        """Candles of the configured timeframe in UTC, oldest first. The last row is the candle still forming."""
+        tfc = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 10: 10, 15: 15, 30: 30, 60: TIMEFRAME_H1}.get(get_settings().timeframe_min, TIMEFRAME_H1)
+        expr = "(lambda r: None if r is None else r.tolist())(mt5.copy_rates_from_pos(%r, %d, 0, %d))" % (symbol, tfc, count)
         rows = self._eval(expr)
         if not rows:
             raise BrokerError(f"no candles for {symbol}: {self._eval('mt5.last_error()')}")
@@ -233,8 +234,9 @@ class MockBroker:
         wick = np.abs(rng.normal(0, close * 0.0012))
         high = np.maximum(open_, close) + wick
         low = np.minimum(open_, close) - wick
-        now = pd.Timestamp.now(tz="UTC").floor("h")
-        times = [now - pd.Timedelta(hours=count - 1 - i) for i in range(count)]
+        tf = get_settings().timeframe_min
+        now = pd.Timestamp.now(tz="UTC").floor(f"{tf}min")
+        times = [now - pd.Timedelta(minutes=tf * (count - 1 - i)) for i in range(count)]
         return pd.DataFrame({"time": times, "open": open_, "high": high, "low": low, "close": close,
                              "tick_volume": 100, "spread": 20, "real_volume": 0})
 

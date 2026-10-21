@@ -1,4 +1,4 @@
-"""The hourly cycle, order execution, reconciliation and the kill switch."""
+"""The trading cycle (one per candle), order execution, reconciliation and the kill switch."""
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from . import collectors, scoring
 from .broker import ACCOUNT_TRADE_MODE_DEMO, BrokerError, get_broker
 from . import venues as V
-from .config import Settings, get_settings
+from .config import Settings, get_settings, tf_label
 from .db import NewsItem, Position, Signal, iso, kv_get, kv_set, log, session, utcnow
 from .decision import decide
 from .features import compute_technicals
@@ -165,7 +165,8 @@ def _run_cycle(force: bool) -> dict:
 
     macro = (collectors.snapshot("macro") or {}).get("data")
     cot = (collectors.snapshot("cot") or {}).get("data")
-    all_positions = open_positions_view()
+    if utcnow().minute < cfg.timeframe_min:
+        prune()
 
     # 1. technicals for every symbol
     techs, infos, ticks, closes, candle_times, stale = {}, {}, {}, {}, {}, {}
@@ -173,7 +174,7 @@ def _run_cycle(force: bool) -> dict:
         bsym = cfg.broker_symbol(sym)
         try:
             info = broker.symbol_info(bsym)
-            df = broker.rates(bsym, 500)
+            df = broker.rates(bsym, 500 if cfg.timeframe_min >= 30 else 1500)
             tick = broker.tick(bsym)
         except BrokerError as e:
             log(f"{sym}: {e}", "error", sym)
@@ -183,9 +184,9 @@ def _run_cycle(force: bool) -> dict:
             log(f"{sym}: only {len(closed)} candles, need {MIN_CANDLES}", "warn", sym)
             continue
         last_open = closed["time"].iloc[-1]
-        age_h = (utcnow() - last_open.to_pydatetime()).total_seconds() / 3600
-        stale[sym] = (not force) and age_h > 2.5
-        techs[sym] = compute_technicals(closed, info["digits"])
+        age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
+        stale[sym] = (not force) and age_min > 4 * cfg.timeframe_min + 2
+        techs[sym] = compute_technicals(closed, info["digits"], cfg.timeframe_min)
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
         candle_times[sym] = iso(last_open.to_pydatetime())
@@ -218,7 +219,7 @@ def _run_cycle(force: bool) -> dict:
         comb = scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None)
 
         def mk(venue: str = "") -> Signal:
-            return Signal(cycle_id=cycle_id, symbol=sym, candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
+            return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
                           agree=comb["agree"], available=comb["available"], factors=factors, venue=venue,
                           mode=(f"{venue}:{'auto' if vctx[venue]['auto'] else 'manual'}" if venue in vctx else ""),
                           context={"closes": closes[sym]})
@@ -236,7 +237,6 @@ def _run_cycle(force: bool) -> dict:
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
             sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
             sid = _save(sig)
-            log(f"{sym}: {sig.reason}", "info", sym, sid)
             results[sym] = sig.status
             continue
 
@@ -292,6 +292,14 @@ def _run_cycle(force: bool) -> dict:
             results[sym] = ", ".join(outcome) or "no venue reachable"
             continue
 
+        # do not pester Claude: after a NO on this symbol and direction, wait out the cooldown
+        with session() as s:
+            recent_no = s.scalars(select(Signal).where(Signal.symbol == sym, Signal.bias == comb["bias"], Signal.status == "claude_no",
+                                                       Signal.ts >= utcnow() - timedelta(minutes=cfg.claude_cooldown_min))).first()
+        if recent_no is not None:
+            results[sym] = "claude_cooldown"
+            continue
+
         # Claude has the final say, once per symbol, and every venue shares the answer
         v0 = passed[0]
         ctx = _claude_context(sym, comb, factors, levels, tech, closes[sym], news24, cb_items, macro, cot, vctx[v0]["positions"],
@@ -326,6 +334,18 @@ def _run_cycle(force: bool) -> dict:
     return {"ok": True, "cycle_id": cycle_id, "results": results}
 
 
+def prune() -> None:
+    """Keep the database small now that a cycle runs every few minutes: drop old no-trade rows and old journal lines."""
+    from sqlalchemy import delete
+
+    from .db import Activity
+
+    with session() as s:
+        s.execute(delete(Signal).where(Signal.status == "no_trade", Signal.ts < utcnow() - timedelta(days=3)))
+        s.execute(delete(Activity).where(Activity.ts < utcnow() - timedelta(days=14)))
+        s.commit()
+
+
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
@@ -341,7 +361,7 @@ def _claude_context(sym, comb, factors, levels, tech, closes, news24, cb_items, 
     heads = [{"title": n.title, "effect": (n.tags or {}).get(sym, 0)} for n in sorted(news24, key=lambda x: x.published, reverse=True)
              if n.tags is not None and (n.tags or {}).get(sym, 0) != 0][:12]
     return {
-        "symbol": sym, "timeframe": "H1", "proposed_side": comb["bias"],
+        "symbol": sym, "timeframe": tf_label(), "proposed_side": comb["bias"],
         "composite_score": comb["score"], "factors_agreeing": f"{comb['agree']} of {comb['available']}",
         "factors": {k: {"score": None if v["score"] is None else round(v["score"]), "weight": v["weight"], "reading": v["reading"]} for k, v in factors.items()},
         "levels": levels,
@@ -566,13 +586,14 @@ def state() -> dict:
     from .llm import usage
 
     now = utcnow()
-    nxt = now.replace(minute=0, second=cfg.cycle_delay_seconds, microsecond=0)
+    tf = max(1, min(60, cfg.timeframe_min))
+    nxt = now.replace(minute=(now.minute // tf) * tf, second=cfg.cycle_delay_seconds, microsecond=0)
     if nxt <= now:
-        nxt += timedelta(hours=1)
+        nxt += timedelta(minutes=tf)
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
         "now": iso(now), "allow_live": V.allow_live(), "halted": halted(),
-        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed,
+        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed, "timeframe": tf_label(),
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct},

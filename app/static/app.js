@@ -116,7 +116,7 @@ async function desk() {
     <td>${(s.venues || []).length ? s.venues.map((x) => `<a href="#/signal/${x.id}">${vPill(x.venue)} ${stPill(x.status)}</a>`).join(" ") : stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc((s.venues || []).length ? "" : s.reason)}</div></td>
     <td class="mono mute">${hm(s.ts)}</td></tr>`).join("");
   html += `<div class="grid"><div class="col-main">
-    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
+    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">${esc(st.timeframe)} candles · threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
       <div class="tw"><table><thead><tr><th>Symbol</th><th>Bias</th><th>Score</th><th>Claude</th><th>Outcome</th><th>At</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" class="mute">No cycle has run yet. Press “Run cycle now”.</td></tr>'}</tbody></table></div></section>`;
 
@@ -190,7 +190,7 @@ async function detail(id) {
     <div class="tools">${stPill(s.status)}<a class="btn" href="#/">Back to desk</a></div></header>
     <p class="mute" style="margin:0">${esc(s.reason)}</p>
     <div class="grid"><div class="col-main">
-    <section class="card"><div class="hd"><h2>Price and levels</h2><span class="mono mute">last ${(s.context || {}).closes ? s.context.closes.length : 0} closed H1 candles</span></div><div class="pad">${chart((s.context || {}).closes, l, s.bias)}</div></section>
+    <section class="card"><div class="hd"><h2>Price and levels</h2><span class="mono mute">last ${(s.context || {}).closes ? s.context.closes.length : 0} closed ${esc(s.timeframe || "H1")} candles</span></div><div class="pad">${chart((s.context || {}).closes, l, s.bias)}</div></section>
     <section class="card"><div class="hd"><h2>Why the score is ${signed(s.score, 1)}</h2><span class="mono mute">${s.agree}/${s.available} factors agree</span></div>`;
   for (const [k, f] of Object.entries(s.factors || {})) {
     html += `<div class="factor"><div><strong style="text-transform:capitalize">${esc(k)}</strong> <span class="mute mono">w${esc(f.weight)}</span></div>

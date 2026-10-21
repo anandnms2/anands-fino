@@ -11,6 +11,7 @@ os.environ.update({
     "SCHEDULER_ENABLED": "false",
     "ANTHROPIC_API_KEY": "test-key",
     "MODE": "demo_auto",
+    "TIMEFRAME_MIN": "60",   # the older tests model hourly candles; the M3 behaviour has its own tests
 })
 
 

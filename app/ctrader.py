@@ -49,6 +49,7 @@ HEARTBEAT = 51
 COMMON_ERROR_RES = 50
 
 PERIOD_H1 = 9
+PERIODS = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 10: 6, 15: 7, 30: 8, 60: 9}  # minutes -> ProtoOATrendbarPeriod
 SIDE_BUY, SIDE_SELL = 1, 2
 ORDER_MARKET = 1
 EXEC_FILLED, EXEC_REJECTED, EXEC_CANCELLED, EXEC_EXPIRED = 3, 7, 5, 6
@@ -396,14 +397,17 @@ class CTraderBroker:
         raise BrokerError(f"no price received for {symbol}")
 
     def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
-        """H1 candles in UTC, oldest first. The last row is the candle still forming, as with MT5."""
+        """Candles of the configured timeframe in UTC, oldest first. The last row is the candle still forming, as with MT5."""
         sid = int(self._light_symbol(symbol)["symbolId"])
         now_ms = int(time.time() * 1000)
-        span_ms = int(count * 1.8 * 3600 * 1000)  # allows for weekends
+        tf = get_settings().timeframe_min
+        if tf not in PERIODS:
+            raise BrokerError(f"TIMEFRAME_MIN {tf} is not a cTrader candle size. Use one of {sorted(PERIODS)}")
+        span_ms = int(count * 1.8 * tf * 60 * 1000) + 3 * 24 * 3600 * 1000  # allows for weekends
         bars: list[dict] = []
         to_ms = now_ms
         for _ in range(8):
-            res = self._call(GET_TRENDBARS_REQ, {"ctidTraderAccountId": self._ctid, "symbolId": sid, "period": PERIOD_H1,
+            res = self._call(GET_TRENDBARS_REQ, {"ctidTraderAccountId": self._ctid, "symbolId": sid, "period": PERIODS[tf],
                                                  "fromTimestamp": now_ms - span_ms, "toTimestamp": to_ms})
             got = res.get("trendbar") or []
             bars.extend(got)

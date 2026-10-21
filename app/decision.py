@@ -15,7 +15,7 @@ Reply with JSON only, no other text:
 
 
 def build_prompt(ctx: dict) -> str:
-    return "Setup for your decision (all data is up to the last closed H1 candle):\n" + json.dumps(ctx, indent=1, default=str)
+    return "Setup for your decision (all data is up to the last closed candle; the chart timeframe is in the data, and a trade here lasts minutes to hours):\n" + json.dumps(ctx, indent=1, default=str)
 
 
 def decide(ctx: dict, model: str | None = None) -> dict:

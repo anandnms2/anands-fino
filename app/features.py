@@ -1,10 +1,10 @@
-"""Turns closed H1 candles into the three technical factor scores, each from -100 to +100, with a plain-language reading."""
+"""Turns closed candles into the three technical factor scores, each from -100 to +100, with a plain-language reading."""
 import pandas as pd
 
 from . import indicators as ind
 
 
-def compute_technicals(df: pd.DataFrame, digits: int = 5) -> dict:
+def compute_technicals(df: pd.DataFrame, digits: int = 5, tf_min: int = 60) -> dict:
     """`df` holds CLOSED candles only, oldest first."""
     f = f"{{:.{digits}f}}"
     close = df["close"]
@@ -30,12 +30,14 @@ def compute_technicals(df: pd.DataFrame, digits: int = 5) -> dict:
         parts.append("EMAs mixed, price %s the 50 and %s the 200" % ("above" if c > e50 else "below", "above" if c > e200 else "below"))
     slope = (e50 - e50_prev) / a if a else 0.0
     slope_part = ind.clip(slope * 10, -15, 15)
-    h4 = ind.resample_h4(df)
+    htf_min = 240 if tf_min >= 30 else 60   # the higher timeframe that confirms the trend: H4 on H1/M30 charts, else H1
+    htf_name = "H4" if htf_min == 240 else "H1"
+    h4 = ind.resample_htf(df, htf_min, htf_min // tf_min)
     h4_part = 0.0
     if len(h4) >= 55:
         h4e20, h4e50 = ind.ema(h4["close"], 20).iloc[-1], ind.ema(h4["close"], 50).iloc[-1]
         h4_part = 20.0 if h4e20 > h4e50 else -20.0
-        parts.append("H4 trend " + ("up" if h4_part > 0 else "down"))
+        parts.append(f"{htf_name} trend " + ("up" if h4_part > 0 else "down"))
     structure = 0.0
     if len(highs) >= 2 and len(lows) >= 2:
         hh = highs[-1][1] > highs[-2][1]

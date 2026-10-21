@@ -61,13 +61,14 @@ def candle_pattern(df: pd.DataFrame) -> tuple[str, int] | None:
     return None
 
 
-def resample_h4(df: pd.DataFrame) -> pd.DataFrame:
-    """H4 candles from H1, dropping the bucket that is still forming."""
+def resample_htf(df: pd.DataFrame, minutes: int, per: int) -> pd.DataFrame:
+    """Higher-timeframe candles of `minutes` built from the base candles, keeping only buckets with `per` candles in them."""
     x = df.set_index("time")[["open", "high", "low", "close"]]
-    h4 = x.resample("4h").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
-    cnt = x["close"].resample("4h").count()
-    h4 = h4[cnt.reindex(h4.index) >= 4]
-    return h4.reset_index()
+    rule = f"{minutes}min"
+    h = x.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    cnt = x["close"].resample(rule).count()
+    h = h[cnt.reindex(h.index) >= max(1, int(per * 0.9))]
+    return h.reset_index()
 
 
 def clip(x: float, lo: float = -100.0, hi: float = 100.0) -> float:

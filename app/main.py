@@ -44,9 +44,10 @@ async def lifespan(app: FastAPI):
     cfg = get_settings()
     init_db()
     if cfg.scheduler_enabled:
-        scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute=0, second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
-        scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=60, max_instances=1, coalesce=True)
-        scheduler.add_job(job("news", refresh_news), "interval", minutes=15, max_instances=1, coalesce=True)
+        tf = cfg.timeframe_min
+        scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute=f"*/{tf}" if tf < 60 else 0, second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
+        scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=30, max_instances=1, coalesce=True)
+        scheduler.add_job(job("news", refresh_news), "interval", minutes=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("calendar", collectors.fetch_calendar), "interval", minutes=60, max_instances=1, coalesce=True)
         scheduler.add_job(job("macro", collectors.fetch_macro), "interval", hours=6, max_instances=1, coalesce=True)
         scheduler.add_job(job("cot", collectors.fetch_cot), "interval", hours=12, max_instances=1, coalesce=True)
@@ -95,7 +96,7 @@ def sig_row(s: Signal, full: bool = False) -> dict:
     d = {
         "id": s.id, "ts": iso(s.ts), "symbol": s.symbol, "candle_time": s.candle_time, "bias": s.bias, "score": s.score,
         "agree": s.agree, "available": s.available, "status": s.status, "reason": s.reason, "lots": s.lots, "ticket": s.ticket,
-        "levels": s.levels, "mode": s.mode, "venue": s.venue, "expires_at": iso(s.expires_at),
+        "levels": s.levels, "mode": s.mode, "venue": s.venue, "timeframe": s.timeframe, "expires_at": iso(s.expires_at),
         "confidence": (s.claude or {}).get("confidence"), "decision": (s.claude or {}).get("decision"),
     }
     if full:
