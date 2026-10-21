@@ -31,7 +31,7 @@ One analysis and **one Claude YES/NO per symbol** feed every venue that is switc
 | **Demo** | cTrader demo account with demo funds | cTrader app approved, `Connect cTrader` done |
 | **Live** | cTrader live account, real money | the above plus `ALLOW_LIVE=true` |
 
-Each venue card on the dashboard has two switches: **Trade** (on/off) and **Auto-approve**. With auto-approve on, a cleared trade is sent to that venue straight away. With it off, the trade waits in "Waiting for your approval" (`APPROVAL_TTL_MIN`) until you click Approve. Live is locked until `ALLOW_LIVE=true`, switching Live on or auto-approving it asks for confirmation, and a venue refuses an account of the wrong type (Live refuses a demo account, Demo and Paper refuse a real one).
+Each venue card on the dashboard has two switches: **Trade** (on/off) and **Auto-approve**. With auto-approve on, a cleared trade is sent to that venue straight away. With it off, the trade waits in "Waiting for your approval" (`APPROVAL_TTL_MIN`) until you click Approve. Live is locked until you press **Unlock** on the Live card (or start with `ALLOW_LIVE=true`; the dashboard switch wins afterwards, and **Lock Live** switches Live off again), switching Live on or auto-approving it asks for confirmation, and a venue refuses an account of the wrong type (Live refuses a demo account, Demo and Paper refuse a real one).
 With every venue off the app still analyses and records signals (and posts to `NOTIFY_WEBHOOK_URL`), it just places nothing.
 
 A venue pauses by itself after `MAX_LOSS_STREAK` losses in a row or a 2% daily loss; the red **Halt trading** button stops all venues. **Resume** clears both.

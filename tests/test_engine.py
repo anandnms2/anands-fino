@@ -82,6 +82,18 @@ def test_live_is_locked_without_allow_live():
     assert venues.venue_cfg("live")["on"] is False
 
 
+def test_allow_live_switch_from_dashboard():
+    from app.main import app
+    c = TestClient(app); a = ("admin", "secret"); H = {"X-Requested-With": "fino"}
+    assert c.post("/api/venue/live", auth=a, headers=H, json={"on": True}).status_code == 400
+    assert c.post("/api/allow-live", auth=a, headers=H, json={"on": True}).json()["allow_live"] is True
+    assert c.post("/api/venue/live", auth=a, headers=H, json={"on": True, "auto": True}).json()["on"] is True
+    assert c.get("/api/state", auth=a).json()["allow_live"] is True
+    c.post("/api/allow-live", auth=a, headers=H, json={"on": False})
+    v = venues.venue_cfg("live")
+    assert v["on"] is False and v["auto"] is False
+
+
 def test_manual_approval_flow(monkeypatch):
     force_buy(monkeypatch); yes(monkeypatch)
     venues.set_venue("demo", auto=False)

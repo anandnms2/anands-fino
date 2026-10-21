@@ -396,7 +396,7 @@ def execute_signal(signal_id: int) -> str:
             return _fail(s, sig, f"broker unavailable: {e}")
 
         real = not account_is_demo(account)
-        if venue == "live" and not cfg.allow_live:
+        if venue == "live" and not V.allow_live():
             return _fail(s, sig, "refused: live trading is not enabled (ALLOW_LIVE)")
         if venue == "live" and not real:
             return _fail(s, sig, "refused: the Live venue is connected to a DEMO account")
@@ -479,7 +479,7 @@ def reconcile() -> None:
     for v in V.VENUES:
         if not (V.venue_cfg(v)["on"] or open_positions_view(v)):
             continue
-        if v == "live" and not cfg.allow_live and not open_positions_view(v):
+        if v == "live" and not V.allow_live() and not open_positions_view(v):
             continue
         _reconcile_venue(v, cfg)
 
@@ -568,7 +568,7 @@ def state() -> dict:
         nxt += timedelta(hours=1)
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
-        "now": iso(now), "allow_live": cfg.allow_live, "halted": halted(),
+        "now": iso(now), "allow_live": V.allow_live(), "halted": halted(),
         "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed,
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,

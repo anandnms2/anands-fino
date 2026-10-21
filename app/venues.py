@@ -11,13 +11,29 @@ VENUES = ("paper", "demo", "live")
 LABEL = {"paper": "Paper", "demo": "Demo", "live": "Live"}
 
 
+def allow_live() -> bool:
+    """Live trading unlock: the dashboard switch wins; ALLOW_LIVE in the environment is the starting value."""
+    v = kv_get("allow_live")
+    return bool(get_settings().allow_live) if v is None else bool(v)
+
+
+def set_allow_live(on: bool) -> bool:
+    kv_set("allow_live", bool(on))
+    if not on:
+        all_ = dict(kv_get("venues") or {})
+        all_["live"] = {**(all_.get("live") or {}), "on": False, "auto": False}
+        kv_set("venues", all_)
+    log(f"Live trading {'UNLOCKED' if on else 'locked (Live venue switched off)'}", "warn")
+    return allow_live()
+
+
 def _defaults(v: str) -> dict:
     cfg = get_settings()
     if v == "paper":
         return {"on": bool(cfg.paper_mode), "auto": True}
     if v == "demo":
         return {"on": cfg.mode == "demo_auto", "auto": True}
-    return {"on": cfg.mode in ("live_approval", "live_auto") and cfg.allow_live, "auto": cfg.mode == "live_auto"}
+    return {"on": cfg.mode in ("live_approval", "live_auto") and allow_live(), "auto": cfg.mode == "live_auto"}
 
 
 def venue_cfg(v: str) -> dict:
@@ -25,19 +41,19 @@ def venue_cfg(v: str) -> dict:
         raise ValueError(f"venue must be one of {list(VENUES)}")
     out = {**_defaults(v), **((kv_get("venues") or {}).get(v) or {})}
     out.setdefault("halt", None)
-    if v == "live" and not get_settings().allow_live:
+    if v == "live" and not allow_live():
         out["on"] = False
     return out
 
 
 def locked(v: str) -> bool:
-    return v == "live" and not get_settings().allow_live
+    return v == "live" and not allow_live()
 
 
 def set_venue(v: str, on: bool | None = None, auto: bool | None = None) -> dict:
     if v not in VENUES:
         raise ValueError(f"venue must be one of {list(VENUES)}")
-    if v == "live" and (on or auto) and not get_settings().allow_live:
+    if v == "live" and (on or auto) and not allow_live():
         raise ValueError("Live trading is locked. Set ALLOW_LIVE=true in the environment first.")
     all_ = dict(kv_get("venues") or {})
     cur = {**_defaults(v), **(all_.get(v) or {})}

@@ -225,6 +225,11 @@ def api_venue(name: str, body: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/allow-live")
+def api_allow_live(body: dict = Body(...)):
+    return {"allow_live": venues.set_allow_live(bool(body.get("on")))}
+
+
 @app.post("/api/paper/reset")
 def api_paper_reset():
     from .paper import get_paper

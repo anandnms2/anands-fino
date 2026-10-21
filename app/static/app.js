@@ -87,7 +87,7 @@ async function desk() {
       <div class="v">${a ? money(a.equity) : "–"}</div>
       <div class="s">${a ? `today <span class="${a.day_pnl < 0 ? "bad" : "ok"}">${money(a.day_pnl)}</span> (${signed(a.day_pnl_pct, 2)}%) · ` : ""}${v.open_count}/${r.max_open} open${v.floating ? " · floating " + money(v.floating) : ""}</div>
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;align-items:center">
-        <span class="lab">Trade ${v.locked ? '<span class="mute" title="Set ALLOW_LIVE=true on the server">(ALLOW_LIVE)</span>' : sw(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}` ).replace("onclick=\"", v.name === "live" && !v.on ? "onclick=\"if(!confirm('Switch LIVE trading on? Real money on a real account.'))return;" : "onclick=\"")}</span>
+        <span class="lab">Trade ${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : sw(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}` ).replace("onclick=\"", v.name === "live" && !v.on ? "onclick=\"if(!confirm('Switch LIVE trading on? Real money on a real account.'))return;" : "onclick=\"")}</span>
         <span class="lab">Auto-approve ${v.locked ? "" : sw(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`).replace("onclick=\"", v.name === "live" && !v.auto ? "onclick=\"if(!confirm('Auto-approve LIVE trades? Orders will go out without your click.'))return;" : "onclick=\"")}</span>
         ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset</button>` : ""}
       </div></div>`;
@@ -136,7 +136,8 @@ async function desk() {
 
   html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>
-    ${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}</div></section>`;
+    ${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}
+    ${st.allow_live ? `<button class="btn sm" style="margin-left:8px" onclick="act('/api/allow-live',{on:false},'Live locked')">Lock Live</button>` : ""}</div></section>`;
 
   const meter = (label, val, cap, txt, hot) => `<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${label}</span><span class="mono mute">${txt}</span></div>
     <div class="meter ${hot ? "hot" : ""}"><i style="width:${Math.min(100, cap ? (val / cap) * 100 : 0)}%"></i></div></div>`;
