@@ -249,3 +249,7 @@ svg text { font-family: var(--font-mono); }
 /* the open-trades strip always gets real room: header, column titles and at least two trades */
 #app.full .term { grid-template-rows: minmax(0, 1fr) clamp(200px, 30vh, 340px); }
 #app.full .bottom { max-height: none; min-height: 0; height: 100%; }
+
+.symlink { color: var(--fg); text-decoration: none; }
+.symlink:hover b { color: var(--accent); text-decoration: underline; }
+.tfm { font-size: 10px; font-style: normal; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; }

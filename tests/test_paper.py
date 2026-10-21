@@ -362,3 +362,18 @@ def test_risk_limits_editable_validated_and_reset():
     assert get_settings().max_open == 7          # a rejected change leaves the saved limits alone
     main.api_risk({"reset": True})
     assert get_settings().daily_loss_cap_pct == base
+
+
+def test_position_row_carries_the_candle_size_of_its_signal():
+    from app import main
+    from app.db import Position, Signal, session, utcnow
+
+    with session() as s:
+        sig = Signal(symbol="EURUSD", timeframe="M5", bias="BUY", score=40.0, status="executed", venue="paper")
+        s.add(sig)
+        s.commit()
+        s.add(Position(ticket=900001, venue="paper", symbol="EURUSD", side="BUY", lots=0.1, entry=1.1, sl=1.09, tp=1.12, risk_usd=10, opened_at=utcnow(), signal_id=sig.id))
+        s.commit()
+    rows = main.api_positions()["open"]
+    assert [r["tf"] for r in rows if r["ticket"] == 900001] == [5]
+    assert main._tf_minutes("H1") == 60 and main._tf_minutes(None) is None

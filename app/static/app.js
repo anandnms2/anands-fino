@@ -196,6 +196,14 @@ function renderHead() {
     <div class="tfs" role="group" aria-label="Chart candle size">${st.timeframes.map((m) => `<button aria-pressed="${m === S.tf}" onclick="pickTf(${m})">${m === 60 ? "1h" : m + "m"}</button>`).join("")}</div>`;
   updateHead();
 }
+window.openTrade = (venue, sym, tf) => {   // click an open trade: show its chart on the candle size the trade was taken on
+  const was = S.venue; S.venue = venue; localStorage.setItem("fv", venue);
+  S.sym = sym; localStorage.setItem("fs", sym); syncStream();
+  S.tf = tf || (S.st.venues[venue] || {}).tf || S.tf; S.candleKey = "";
+  if (pageName() !== "terminal" || !S.mounted) { location.hash = "#/"; return; }   // the router draws the terminal with these choices
+  if (was !== venue) { renderBar(); renderBottom(); }
+  renderWatch(); renderHead(); renderSide(); loadCandles();
+};
 window.pickTf = (m) => { S.tf = m; S.candleKey = ""; renderHead(); loadCandles(); };
 function updateHead() {
   const p = (S.px[S.venue] || {})[S.sym]; if (!p) return;
@@ -331,7 +339,7 @@ function renderBottom() {
   if (S.tab === "pos") {
     h = `<div class="tw"><div class="ptable"><div class="prow head"><span>SYMBOL</span><span>SIDE</span><span>LOTS</span><span>ENTRY</span><span>LIVE</span><span>STOP</span><span>TARGET</span><span>STOP ◂ PRICE ▸ TARGET</span><span class="r">P/L</span><span class="r">R</span><span></span></div>
       ${mine.map((p) => `<div class="prow" data-k="${p.venue}:${p.ticket}" data-e="${p.entry}" data-sl="${p.sl}" data-tp="${p.tp}" data-side="${p.side}">
-        <span><b>${esc(p.symbol)}</b> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
+        <span><a href="#/" class="symlink" title="Open ${esc(p.symbol)} chart" onclick="openTrade('${p.venue}','${esc(p.symbol)}',${p.tf || 0});return false"><b>${esc(p.symbol)}</b>${p.tf ? ` <i class="mute tfm">${p.tf >= 60 ? p.tf / 60 + "h" : p.tf + "m"}</i>` : ""}</a> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
         <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span class="mono bad">${pxs(p.sl, p.symbol)}</span><span class="mono ok">${pxs(p.tp, p.symbol)}</span>
         <span class="pbar"><i class="pf"></i><i class="pn"></i></span><span class="mono r pl ${p.floating < 0 ? "bad" : "ok"}"><b>${money(p.floating)}</b></span><span class="mono r pr">–</span>
         <button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></div>`).join("") || '<div class="pad mute" style="padding-top:16px">Nothing open on this venue.</div>'}</div></div>`;

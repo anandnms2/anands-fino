@@ -108,8 +108,19 @@ def sig_row(s: Signal, full: bool = False) -> dict:
     return d
 
 
+def _tf_minutes(label: str | None) -> int | None:
+    """'M3' -> 3, 'H1' -> 60."""
+    import re
+
+    m = re.fullmatch(r"([MH])(\d+)", label or "")
+    return None if not m else int(m.group(2)) * (60 if m.group(1) == "H" else 1)
+
+
 def pos_row(p: Position) -> dict:
-    return {"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl, "tp": p.tp,
+    from sqlalchemy.orm import object_session
+
+    sig = object_session(p).get(Signal, p.signal_id) if p.signal_id and object_session(p) else None
+    return {"tf": _tf_minutes(sig.timeframe) if sig else None, "ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl, "tp": p.tp,
             "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price, "status": p.status,
             "opened_at": iso(p.opened_at), "closed_at": iso(p.closed_at), "profit": p.profit, "close_price": p.close_price,
             "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl, "watch": engine._watch.get((p.venue, p.ticket))}
