@@ -20,7 +20,7 @@ class Feed:
 
     def __init__(self):
         self.extra: dict[str, list[tuple]] = {}
-        self.base = {"EURUSD": 1.1650, "XAUUSD": 4100.0, "XAGUSD": 50.0, "GBPUSD": 1.34}
+        self.base = {"EURUSD": 1.1650, "XAUUSD": 4100.0, "XAGUSD": 50.0, "GBPUSD": 1.34, "USDJPY": 155.0, "EURJPY": 180.0}
 
     def __call__(self, symbol):
         now_h = int(time.time() // 3600) * 3600
@@ -148,3 +148,13 @@ def test_paper_env_default_and_switch_override(feed, monkeypatch):
     assert venues.venue_cfg("paper")["on"] is True
     venues.set_venue("paper", on=False)
     assert venues.venue_cfg("paper")["on"] is False
+
+
+def test_yen_pair_profit_is_converted_to_usd(pb):
+    t = pb.tick("USDJPY")
+    info = pb.symbol_info("USDJPY")
+    assert info["currency_profit"] == "JPY" and info["digits"] == 3
+    r = pb.send_market("USDJPY", "BUY", 0.10, t["ask"] - 0.5, t["ask"] + 5.0, MAGIC, 20)
+    p = pb._state()["positions"][str(r["order"])]
+    one_yen = pb._pnl({**p, "price_open": 155.0}, 156.0)   # +1.00 yen on 0.10 lot = 10,000 yen
+    assert one_yen == pytest.approx(10000 / ((pb.tick("USDJPY")["bid"] + pb.tick("USDJPY")["ask"]) / 2), rel=1e-6)

@@ -21,7 +21,13 @@ DEFAULT_FEEDS = [
 ]
 
 # Symbols that move together. The gate allows one open trade per group and direction.
-CORRELATION_GROUPS = [["XAUUSD", "XAGUSD"], ["EURUSD", "GBPUSD"]]
+# A symbol can sit in several groups (USDJPY is both USD-long and JPY-short).
+CORRELATION_GROUPS = [
+    ["XAUUSD", "XAGUSD"],
+    ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD"],          # all short the dollar when bought
+    ["USDJPY", "USDCHF", "USDCAD"],                    # all long the dollar when bought
+    ["USDJPY", "EURJPY", "GBPJPY", "AUDJPY"],          # all short the yen when bought
+]
 
 MODES = ["research", "alerts", "demo_auto", "live_approval", "live_auto"]
 LIVE_MODES = {"live_approval", "live_auto"}
@@ -62,7 +68,7 @@ class Settings(BaseSettings):
     deviation: int = 20
 
     # what to trade
-    symbols: str = "XAUUSD,XAGUSD,EURUSD,GBPUSD"
+    symbols: str = "XAUUSD,XAGUSD,EURUSD,GBPUSD,USDJPY,USDCHF,USDCAD,AUDUSD,NZDUSD,EURJPY,GBPJPY,EURGBP,AUDJPY"
     symbol_map: str = ""  # JSON, e.g. {"XAUUSD": "XAUUSD.m"} when the broker adds suffixes
 
     # autonomy. One of: research, alerts, demo_auto, live_approval, live_auto

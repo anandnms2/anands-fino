@@ -58,7 +58,9 @@ def fetch_macro() -> dict:
 
 
 # ------------------------------------------------------------------ CFTC Commitments of Traders
-COT_MARKETS = {"XAUUSD": "GOLD -", "XAGUSD": "SILVER -", "EURUSD": "EURO FX -", "GBPUSD": "BRITISH POUND"}
+COT_MARKETS = {"XAUUSD": "GOLD -", "XAGUSD": "SILVER -", "EURUSD": "EURO FX -", "GBPUSD": "BRITISH POUND",
+               "AUDUSD": "AUSTRALIAN DOLLAR", "NZDUSD": "NEW ZEALAND DOLLAR", "USDJPY": "JAPANESE YEN",
+               "USDCHF": "SWISS FRANC", "USDCAD": "CANADIAN DOLLAR"}  # USDxxx pairs are inverted when scored
 
 
 def fetch_cot() -> dict:

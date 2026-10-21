@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from app import broker as brk
 from app import collectors, engine, scoring, venues
+from app.config import get_settings
 from app.db import Position, Signal, kv_set, session
 
 
@@ -21,7 +22,7 @@ def test_cycle_executes_on_demo(monkeypatch):
     assert out["ok"], out
     with session() as s:
         sigs = s.scalars(select(Signal)).all()
-        assert len(sigs) == 4
+        assert len(sigs) == len(get_settings().symbol_list) == 13
         done = [x for x in sigs if x.status == "executed"]
         assert done and all(x.ticket for x in done)
         assert s.scalars(select(Position).where(Position.status == "open")).first() is not None

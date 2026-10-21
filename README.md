@@ -40,6 +40,15 @@ A venue pauses by itself after `MAX_LOSS_STREAK` losses in a row or a 2% daily l
 
 **Initial switches** come from the environment (`PAPER_MODE`, `MODE`: `demo_auto` switches Demo on; `live_approval` / `live_auto` switch Live on with manual / auto approval when `ALLOW_LIVE=true`); after that the dashboard switches win and are stored in the database.
 
+## Symbols
+Default 13: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD, EURJPY, GBPJPY, EURGBP, AUDJPY (`SYMBOLS`, comma separated; any FX pair or metal your broker lists works, use `SYMBOL_MAP` for odd broker names).
+- Each cycle ranks the setups by score and works through the strongest first, so the open-trade slots go to the best ones.
+- Pairs whose profit is not in USD (JPY, CHF, CAD, GBP) are sized by converting the stop distance into the account currency with the live rate; if the rate cannot be priced the trade is refused.
+- Correlation groups (one open trade per group and direction): the metals; the four dollar-short pairs (EURUSD, GBPUSD, AUDUSD, NZDUSD); the three dollar-long pairs (USDJPY, USDCHF, USDCAD); the four yen-short pairs (USDJPY and the JPY crosses).
+- The macro (dollar, real yield) factor does not apply to cross pairs, and the CFTC factor covers the pairs with a futures contract, so crosses are scored on fewer factors; the 60% agree rule works on whatever is available.
+- More symbols means more price requests per cycle and a busier 3-minute loop. The free Twelve Data plan cannot feed 13 symbols; use Yahoo or cTrader prices.
+- The CFTC names for the added currencies (yen, franc, Canadian, Australian and NZ dollar) are not yet checked against a live download.
+
 ## Schedule
 Trading cycle every `TIMEFRAME_MIN` minutes (default 3, on candle close, 15 s after the boundary) · open trades checked every 30 s · news every 5 min · calendar hourly · macro 6 h · COT 12 h. Trend confirmation uses H1 on M3 charts (H4 on M30/H1). After Claude says NO to a symbol and direction it is not asked again for `CLAUDE_COOLDOWN_MIN` (15) minutes, which keeps the Claude call count down. Old no-trade rows (3 days) and journal lines (14 days) are pruned automatically.
 

@@ -76,3 +76,13 @@ def test_agree_percentage_rule():
     # 3 of 5 agree is 60%: allowed. 2 of 5 (40%) is not.
     assert combine(f(60, 60, 60, -5, -5), w, 20, 4, 60)["bias"] == "BUY"
     assert combine(f(80, 80, -5, -5, -5), w, 20, 4, 60)["bias"] == "NONE"
+
+
+def test_inverse_peer_and_inverted_cot():
+    from app import scoring as sc
+    techs = {"EURUSD": {"trend": {"score": 50}}}
+    s, why = sc.intermarket_score("USDCHF", techs)
+    assert s == -30 and "contradicts" in why   # EURUSD up is bad for USDCHF
+    row = {"USDJPY": {"net": 90000, "percentile": 95, "weeks": 150, "date": "x"}}
+    s, why = sc.positioning_score("USDJPY", row)
+    assert s == 60   # funds crowded long yen = USDJPY crowded short, contrarian lift

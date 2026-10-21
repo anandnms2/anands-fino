@@ -50,3 +50,21 @@ def test_correlation_and_limits():
 def test_too_small_budget():
     r = run(account={**ACCT, "balance": 1000.0})
     assert not r["ok"] and "minimum" in r["reason"].lower()
+
+
+def test_non_usd_profit_currency_is_converted_into_account_currency():
+    jpy = {**INFO, "trade_contract_size": 100000.0, "currency_profit": "JPY"}
+    lv = {"entry": 155.0, "sl": 154.5, "tp": 155.9}  # 50 pips = 0.5 yen
+    r = run(symbol="USDJPY", sym_info=jpy, levels=lv, profit_rate=1 / 155.0, spread_price=0.012)
+    assert r["ok"], r["reason"]
+    # risk 100 USD / (0.5 yen * 100000 units / 155) = 0.31 lots, rounded down
+    assert r["lots"] in (0.30, 0.31) and abs(r["risk_usd"] - r["lots"] * 0.5 * 100000 / 155) < 1e-6 and r["risk_usd"] <= 100.0
+    assert not run(symbol="USDJPY", sym_info=jpy, levels=lv, profit_rate=None, spread_price=0.012)["ok"]  # no conversion rate: refuse
+
+
+def test_symbol_in_two_correlation_groups():
+    open_ = [{"symbol": "EURJPY", "side": "BUY", "risk_usd": 50.0}, ]
+    assert not run(symbol="USDJPY", open_positions=open_)["ok"]          # both short the yen
+    assert not run(symbol="USDCAD", open_positions=[{"symbol": "USDJPY", "side": "BUY", "risk_usd": 50.0}])["ok"]  # both long the dollar
+    assert any(c["ok"] for c in run(symbol="USDCAD", open_positions=[{"symbol": "USDJPY", "side": "SELL", "risk_usd": 50.0}])["checks"]
+               if c["name"].startswith("No correlated"))

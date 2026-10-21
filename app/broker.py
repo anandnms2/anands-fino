@@ -216,13 +216,15 @@ class MockBroker:
     def symbol_info(self, symbol: str) -> dict:
         gold = symbol.startswith("XAU")
         silver = symbol.startswith("XAG")
-        return {"digits": 2 if gold else 3 if silver else 5, "point": 0.01 if gold else 0.001 if silver else 0.00001,
+        jpy = symbol.endswith("JPY")
+        return {"digits": 2 if gold else 3 if silver or jpy else 5, "point": 0.01 if gold else 0.001 if silver or jpy else 0.00001,
                 "spread": 18 if gold else 25, "trade_contract_size": 100.0 if gold else 5000.0 if silver else 100000.0,
-                "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01, "currency_profit": "USD",
+                "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01, "currency_profit": "USD" if gold or silver else symbol[3:6],
                 "currency_base": symbol[:3], "trade_stops_level": 0, "filling_mode": 3, "trade_mode": 4, "visible": True}
 
     def _series(self, symbol: str, n: int) -> np.ndarray:
-        base = {"XAUUSD": 4100.0, "XAGUSD": 50.0, "EURUSD": 1.165, "GBPUSD": 1.34}.get(symbol, 1.0)
+        base = {"XAUUSD": 4100.0, "XAGUSD": 50.0, "EURUSD": 1.165, "GBPUSD": 1.34, "USDJPY": 155.0, "USDCHF": 0.80, "USDCAD": 1.38,
+                "AUDUSD": 0.66, "NZDUSD": 0.60, "EURJPY": 180.0, "GBPJPY": 208.0, "EURGBP": 0.87, "AUDJPY": 102.0}.get(symbol, 1.0)
         rng = np.random.default_rng(zlib.crc32(symbol.encode()))
         steps = rng.normal(0.0004, 0.0035, n)  # gentle upward drift
         return base * np.exp(np.cumsum(steps) - steps.sum())

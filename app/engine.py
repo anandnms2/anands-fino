@@ -77,6 +77,23 @@ def open_positions_view(venue: str | None = None) -> list[dict]:
                  "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue} for p in s.scalars(q).all()]
 
 
+def profit_rate(broker, info: dict, account: dict) -> float | None:
+    """Value of one unit of the symbol's profit currency in the account currency (None when it cannot be priced)."""
+    pc, ac = info.get("currency_profit"), account.get("currency")
+    if not pc or not ac or pc == ac:
+        return 1.0
+    cfg = get_settings()
+    for pair, inv in ((pc + ac, False), (ac + pc, True)):
+        try:
+            t = broker.tick(cfg.broker_symbol(pair))
+        except BrokerError:
+            continue
+        mid = (t["bid"] + t["ask"]) / 2
+        if mid > 0:
+            return 1.0 / mid if inv else mid
+    return None
+
+
 def account_is_demo(account: dict) -> bool:
     return account.get("trade_mode") == ACCOUNT_TRADE_MODE_DEMO
 
@@ -198,8 +215,8 @@ def _run_cycle(force: bool) -> dict:
                     for n in s.scalars(select(NewsItem).where(NewsItem.central_bank == 1, NewsItem.published >= utcnow() - timedelta(hours=48)).order_by(NewsItem.published.desc()).limit(6))]
 
     results = {}
+    prep = {}
     for sym, tech in techs.items():
-        info, tick = infos[sym], ticks[sym]
         factors = {
             "trend": {**tech["trend"], "source": "code"},
             "pattern": {**tech["pattern"], "source": "code"},
@@ -216,7 +233,12 @@ def _run_cycle(force: bool) -> dict:
         weights = cfg.weights_dict
         for k, v in factors.items():
             v["weight"] = weights.get(k, 0)
-        comb = scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None)
+        prep[sym] = (factors, scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None))
+
+    # strongest setups first, so the open-trade slots go to the best of the 13 rather than the first in the list
+    for sym in sorted(prep, key=lambda s: -abs(prep[s][1]["score"])):
+        tech, info, tick = techs[sym], infos[sym], ticks[sym]
+        factors, comb = prep[sym]
 
         def mk(venue: str = "") -> Signal:
             return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
@@ -277,7 +299,8 @@ def _run_cycle(force: bool) -> dict:
             vlevels[v] = vlev
             gate_args[v] = dict(cfg=cfg, symbol=sym, bias=comb["bias"], levels=vlev, account=c["account"], sym_info=vinfo,
                                 spread_price=vtick["ask"] - vtick["bid"], open_positions=c["positions"], day_start_equity=c["start_eq"],
-                                loss_streak=V.loss_streak(v), halted=False, blackout=blk, data_ok=data_ok)
+                                loss_streak=V.loss_streak(v), halted=False, blackout=blk, data_ok=data_ok,
+                                profit_rate=profit_rate(vb, vinfo, c["account"]))
             pre = evaluate(confidence=None, **gate_args[v])
             if pre["ok"]:
                 passed.append(v)
@@ -435,7 +458,8 @@ def execute_signal(signal_id: int) -> str:
         fin = evaluate(cfg=cfg, symbol=sym, bias=side, levels=live_levels, confidence=(sig.claude or {}).get("confidence", 0.0),
                        account=account, sym_info=info, spread_price=tick["ask"] - tick["bid"], open_positions=open_positions_view(venue),
                        day_start_equity=V.day_start_equity(venue, account), loss_streak=V.loss_streak(venue),
-                       halted=halted()["on"] or V.venue_halt(venue)["on"], blackout=collectors.blackout(sym), data_ok=True)
+                       halted=halted()["on"] or V.venue_halt(venue)["on"], blackout=collectors.blackout(sym), data_ok=True,
+                       profit_rate=profit_rate(broker, info, account))
         sig.gate = fin
         if not fin["ok"]:
             return _fail(s, sig, "gate re-check failed: " + fin["reason"], status="gate_blocked")

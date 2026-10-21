@@ -1,8 +1,11 @@
 """Factor scores outside the pure price technicals, the weighted composite, and the trade levels."""
 from . import indicators as ind
 
-PEERS = {"XAUUSD": "XAGUSD", "XAGUSD": "XAUUSD", "EURUSD": "GBPUSD", "GBPUSD": "EURUSD"}
-COT_SYMBOLS = {"XAUUSD", "XAGUSD", "EURUSD", "GBPUSD"}
+# symbol -> (peer, sign): sign -1 means the peer moves the opposite way, so its trend counts against ours
+PEERS = {"XAUUSD": ("XAGUSD", 1), "XAGUSD": ("XAUUSD", 1), "EURUSD": ("GBPUSD", 1), "GBPUSD": ("EURUSD", 1),
+         "AUDUSD": ("NZDUSD", 1), "NZDUSD": ("AUDUSD", 1), "USDCAD": ("AUDUSD", -1), "USDCHF": ("EURUSD", -1),
+         "USDJPY": ("EURJPY", 1), "EURJPY": ("USDJPY", 1), "GBPJPY": ("EURJPY", 1), "AUDJPY": ("AUDUSD", 1), "EURGBP": ("GBPUSD", -1)}
+COT_INVERT = {"USDJPY", "USDCHF", "USDCAD"}  # the futures contract is the foreign currency, so the pair moves the other way
 
 
 def macro_score(symbol: str, macro: dict | None) -> tuple[float | None, str]:
@@ -51,21 +54,26 @@ def positioning_score(symbol: str, cot: dict | None) -> tuple[float | None, str]
     if not row:
         return None, "no COT reading for this symbol"
     p = row["percentile"]
+    net = row["net"]
+    if symbol in COT_INVERT:
+        p, net = 100 - p, -net
     if p >= 90:
         score, note = -60.0, "crowded long, contrarian drag"
     elif p <= 10:
         score, note = 60.0, "crowded short, contrarian lift"
     else:
         score, note = (p - 50) / 50 * 20, "not at an extreme, mild trend following"
-    return score, f"funds net {row['net']:,.0f}, {p:.0f}th percentile of {row['weeks']} weeks ({row['date']}): {note}"
+    return score, f"funds net {net:,.0f} (in this pair's direction), {p:.0f}th percentile of {row['weeks']} weeks ({row['date']}): {note}"
 
 
 def intermarket_score(symbol: str, techs: dict) -> tuple[float | None, str]:
-    peer = PEERS.get(symbol)
-    if not peer or peer not in techs:
+    pr = PEERS.get(symbol)
+    if not pr or pr[0] not in techs:
         return None, "no peer symbol to confirm against"
-    t = techs[peer]["trend"]["score"]
-    return ind.clip(t * 0.6), f"{peer} trend score {t:+.0f} {'confirms' if t > 0 else 'contradicts' if t < 0 else 'is flat'}"
+    peer, sign = pr
+    t = techs[peer]["trend"]["score"] * sign
+    rel = "(inverse) " if sign < 0 else ""
+    return ind.clip(t * 0.6), f"{peer} {rel}trend score {t:+.0f} {'confirms' if t > 0 else 'contradicts' if t < 0 else 'is flat'}"
 
 
 def combine(factors: dict, weights: dict, threshold: float, min_agree: int, min_agree_pct: float | None = None) -> dict:

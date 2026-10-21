@@ -20,7 +20,8 @@ UA = {"User-Agent": "Mozilla/5.0 (compatible; AnandsFino/1.0)"}
 
 # Yahoo symbols to try in order (spot first, futures as a fallback; the futures price differs slightly from spot)
 YAHOO = {"XAUUSD": ["XAUUSD=X", "GC=F"], "XAGUSD": ["XAGUSD=X", "SI=F"]}
-DEFAULT_SPREAD = {"XAUUSD": 0.30, "XAGUSD": 0.03}  # price units; forex pairs use 0.00012
+DEFAULT_SPREAD = {"XAUUSD": 0.30, "XAGUSD": 0.03, "USDJPY": 0.012, "EURJPY": 0.018, "GBPJPY": 0.028, "AUDJPY": 0.022,
+                  "EURGBP": 0.00015, "USDCHF": 0.00016, "USDCAD": 0.00018}  # price units; other pairs use 0.00012
 CONTRACT = {"XAUUSD": 100.0, "XAGUSD": 5000.0}
 DIGITS = {"XAUUSD": 2, "XAGUSD": 3}
 
@@ -168,7 +169,21 @@ class PaperBroker:
     # ---- simulated fills ----
     def _pnl(self, p: dict, exit_price: float) -> float:
         d = 1 if p["type"] == 0 else -1
-        return d * (exit_price - p["price_open"]) * p["volume"] * CONTRACT.get(p["symbol"], 100000.0)
+        raw = d * (exit_price - p["price_open"]) * p["volume"] * CONTRACT.get(p["symbol"], 100000.0)
+        return raw * self._to_usd(p["symbol"][3:6])
+
+    def _to_usd(self, ccy: str) -> float:
+        """Value of one unit of the profit currency in USD, from the feed's own prices."""
+        if ccy == "USD":
+            return 1.0
+        for pair, inv in ((f"{ccy}USD", False), (f"USD{ccy}", True)):
+            try:
+                t = self.tick(pair)
+            except BrokerError:
+                continue
+            mid = (t["bid"] + t["ask"]) / 2
+            return 1.0 / mid if inv else mid
+        raise BrokerError(f"no price to convert {ccy} to USD")
 
     def _book_close(self, st: dict, p: dict, price: float, why: str) -> None:
         profit = self._pnl(p, price)
@@ -211,7 +226,10 @@ class PaperBroker:
                 elif (buy and hi >= p["tp"]) or (not buy and lo <= p["tp"]):
                     hit = ("tp", p["tp"])
             if hit:
-                self._book_close(st, p, hit[1], hit[0])
+                try:
+                    self._book_close(st, p, hit[1], hit[0])
+                except BrokerError:
+                    continue
                 changed = True
         return changed
 

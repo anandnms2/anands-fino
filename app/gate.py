@@ -5,15 +5,16 @@ from .config import CORRELATION_GROUPS, Settings
 
 
 def _group(symbol: str) -> set[str]:
+    out = {symbol}
     for g in CORRELATION_GROUPS:
         if symbol in g:
-            return set(g)
-    return {symbol}
+            out |= set(g)
+    return out
 
 
 def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence: float | None, account: dict,
              sym_info: dict, spread_price: float, open_positions: list[dict], day_start_equity: float,
-             loss_streak: int, halted: bool, blackout: tuple[bool, str], data_ok: bool) -> dict:
+             loss_streak: int, halted: bool, blackout: tuple[bool, str], data_ok: bool, profit_rate: float | None = None) -> dict:
     """Returns {ok, reason, lots, risk_usd, checks}. `confidence` is None for the pre-check before Claude is asked."""
     checks = []
 
@@ -30,8 +31,10 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
     add("Data is fresh", data_ok, "" if data_ok else "candles or feeds are stale")
     sl_ok = stop > 0 and ((sl < entry) if buy else (sl > entry))
     add("Stop loss present and on the right side", sl_ok, f"stop distance {stop:g}")
-    add("Profit currency matches account", sym_info.get("currency_profit") == account.get("currency"),
-        f"{sym_info.get('currency_profit')} vs {account.get('currency')}")
+    same_ccy = sym_info.get("currency_profit") == account.get("currency")
+    rate = 1.0 if same_ccy else profit_rate
+    add("Profit currency known in account currency", rate is not None and rate > 0,
+        f"{sym_info.get('currency_profit')} to {account.get('currency')}" + ("" if same_ccy or not rate else f" at {rate:g}") + ("" if rate else ": no conversion rate"))
     if confidence is None:
         add("Claude confidence", True, "checked after Claude decides")
     else:
@@ -53,7 +56,7 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
     # position size from the risk budget, rounded DOWN to the broker's lot step
     lots, risk_usd = 0.0, 0.0
     balance = account["balance"]
-    per_lot_loss = stop * sym_info["trade_contract_size"]
+    per_lot_loss = stop * sym_info["trade_contract_size"] * (rate if rate else 0.0)
     if per_lot_loss > 0:
         raw = balance * cfg.risk_per_trade_pct / 100 / per_lot_loss
         step = sym_info["volume_step"] or 0.01

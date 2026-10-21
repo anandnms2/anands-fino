@@ -6,7 +6,8 @@ from .db import NewsItem, log, session
 from .llm import LLMError, claude_chat, extract_json, free_chat
 
 SYSTEM = ("You tag financial headlines for a forex and metals desk. Reply with a JSON array only, no other text. "
-          "XAUUSD is gold and XAGUSD is silver, both priced in US dollars. EURUSD rising means the euro strengthens against the dollar.")
+          "XAUUSD is gold and XAGUSD is silver, both priced in US dollars. A pair ABCXYZ rises when ABC strengthens against XYZ: "
+          "EURUSD rising means the euro strengthens against the dollar, USDJPY rising means the dollar strengthens and the yen weakens, EURGBP rising means the euro beats the pound.")
 
 
 def _prompt(titles: list[str], symbols: list[str]) -> str:
