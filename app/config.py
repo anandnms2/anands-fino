@@ -88,7 +88,8 @@ class Settings(BaseSettings):
     # signal rules
     weights: str = ""  # JSON override of DEFAULT_WEIGHTS
     score_threshold: float = 35.0
-    min_agree: int = 4
+    min_agree: int = 4                 # used only when min_agree_pct is 0
+    min_agree_pct: float = 60.0        # share of available factors that must agree with the direction
     stop_atr_mult: float = 1.5
     rr_target: float = 2.0
 

@@ -198,3 +198,17 @@ def test_api_auth_and_state():
     assert c.post("/api/venue/demo", auth=auth, headers=H, json={"auto": False}).json()["auto"] is False
     assert c.post("/api/venue/live", auth=auth, headers=H, json={"on": True}).status_code == 400
     assert c.post("/api/venue/nope", auth=auth, headers=H, json={"on": True}).status_code == 400
+
+
+def test_report_per_venue(monkeypatch):
+    force_buy(monkeypatch); yes(monkeypatch)
+    engine.run_cycle(force=True)
+    b = brk.get_broker("demo")
+    for tk in list(b._positions):
+        b.close_position(tk, 0, 0)
+    engine.reconcile()
+    from app.main import app
+    r = TestClient(app).get("/api/report", auth=("admin", "secret")).json()
+    d = r["venues"]["demo"]
+    assert d["trades"] >= 1 and d["net"] < 0 and d["losses"] == d["trades"] and d["win_rate"] == 0
+    assert r["venues"]["live"]["trades"] == 0 and d["by_symbol"] and d["recent"]

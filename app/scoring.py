@@ -68,14 +68,15 @@ def intermarket_score(symbol: str, techs: dict) -> tuple[float | None, str]:
     return ind.clip(t * 0.6), f"{peer} trend score {t:+.0f} {'confirms' if t > 0 else 'contradicts' if t < 0 else 'is flat'}"
 
 
-def combine(factors: dict, weights: dict, threshold: float, min_agree: int) -> dict:
+def combine(factors: dict, weights: dict, threshold: float, min_agree: int, min_agree_pct: float | None = None) -> dict:
     avail = {k: v for k, v in factors.items() if v["score"] is not None}
     wsum = sum(weights.get(k, 0) for k in avail)
     comp = sum(weights.get(k, 0) * v["score"] for k, v in avail.items()) / wsum if wsum else 0.0
     d = 1 if comp > 0 else -1 if comp < 0 else 0
     agree = sum(1 for v in avail.values() if d and v["score"] * d >= 20)
     bias = "NONE"
-    if agree >= min_agree:
+    ok = agree >= min_agree if min_agree_pct is None else (len(avail) >= 3 and agree / len(avail) * 100 >= min_agree_pct - 1e-9)
+    if ok:
         bias = "BUY" if comp >= threshold else "SELL" if comp <= -threshold else "NONE"
     return {"score": round(comp, 2), "agree": agree, "available": len(avail), "bias": bias}
 

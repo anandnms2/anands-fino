@@ -5,7 +5,7 @@ FreeLLMAPI does the volume work (tagging news). **Claude gives the final YES or 
 Hard risk limits live in code and Claude cannot override them.
 
 ## Flow (hourly, on candle close)
-data → technicals → research (FRED, CFTC, calendar, news) → weighted score (7 factors) → risk gate → **Claude YES/NO** → gate re-check → execute / ask approval → journal.
+data → technicals → research (FRED, CFTC, calendar, news) → weighted score (7 factors, at least 60% of them must agree, `MIN_AGREE_PCT`) → risk gate → **Claude YES/NO** → gate re-check → execute / ask approval → journal.
 
 ## Deploy on Coolify (cTrader, the default)
 The broker link is the **cTrader Open API**: no MetaTrader, no Wine. Stack = app + Postgres.

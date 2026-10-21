@@ -61,6 +61,7 @@ async function desk() {
       ${st.mock ? '<span class="pill warn">MOCK broker</span>' : ""}
       ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
       <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
+      <a class="btn" href="#/reports">Reports</a>
       <button class="btn pri" onclick="act('/api/cycle?force=true',{},'Cycle started')">Run cycle now</button>
       <button class="btn" onclick="act('/api/refresh',{},'Refreshing feeds')">Refresh feeds</button>
     </div></header>`;
@@ -115,7 +116,7 @@ async function desk() {
     <td>${(s.venues || []).length ? s.venues.map((x) => `<a href="#/signal/${x.id}">${vPill(x.venue)} ${stPill(x.status)}</a>`).join(" ") : stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc((s.venues || []).length ? "" : s.reason)}</div></td>
     <td class="mono mute">${hm(s.ts)}</td></tr>`).join("");
   html += `<div class="grid"><div class="col-main">
-    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree}+ factors agree</span></div>
+    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
       <div class="tw"><table><thead><tr><th>Symbol</th><th>Bias</th><th>Score</th><th>Claude</th><th>Outcome</th><th>At</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" class="mute">No cycle has run yet. Press “Run cycle now”.</td></tr>'}</tbody></table></div></section>`;
 
@@ -212,13 +213,49 @@ async function detail(id) {
   $app.innerHTML = html;
 }
 
+/* ------------------------------------------------------------ reports */
+let repDays = 0;
+function curveSvg(c) {
+  if (!c || c.length < 2) return '<div class="pad mute">Not enough closed trades for a curve yet.</div>';
+  const W = 700, H = 150, P = 8, vals = [0].concat(c.map((x) => x.pl));
+  const lo = Math.min(...vals), hi = Math.max(...vals), rg = hi - lo || 1;
+  const x = (i) => P + (i / (vals.length - 1)) * (W - 2 * P), y = (v) => H - P - ((v - lo) / rg) * (H - 2 * P);
+  const last = vals[vals.length - 1], col = last >= 0 ? "#3DC48F" : "#F06D6D";
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Cumulative profit and loss"><line x1="${P}" x2="${W - P}" y1="${y(0)}" y2="${y(0)}" stroke="#4A4A52" stroke-dasharray="4 4"/>
+    <polyline points="${vals.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}" fill="none" stroke="${col}" stroke-width="1.8"/></svg>`;
+}
+async function reports() {
+  const r = await api("/api/report?days=" + repDays);
+  let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>Trading reports</h1><div class="lab">Paper · Demo · Live, closed trades after commission and swap</div></div></div>
+    <div class="tools"><span class="seg" style="padding:0">${[[0, "All time"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) => `<button aria-pressed="${repDays === d}" onclick="repDays=${d};render()">${l}</button>`).join("")}</span>
+    <a class="btn" href="#/">Back to desk</a></div></header>`;
+  const tot = Object.values(r.venues);
+  html += `<section class="card strip">${Object.entries(r.venues).map(([v, s]) => `<div><div class="lab">${esc(VLABEL[v])} net P/L</div>
+    <div class="v ${s.net < 0 ? "bad" : s.net > 0 ? "ok" : ""}">${money(s.net)}</div>
+    <div class="s">${s.trades} trades · ${num(s.win_rate, 0)}% win · today ${money(s.today)}</div></div>`).join("")}</section>`;
+  for (const [v, s] of Object.entries(r.venues)) {
+    const kv = (a, b, cls) => `<div class="row"><span>${a}</span><span class="mono ${cls || ""}">${b}</span></div>`;
+    html += `<div class="grid"><div class="col-main"><section class="card"><div class="hd"><h2>${esc(VLABEL[v])}</h2><span class="mono mute">cumulative P/L</span></div><div class="pad">${curveSvg(s.curve)}</div>
+      <div class="tw"><table><thead><tr><th>Symbol</th><th>Trades</th><th>Win rate</th><th class="r">Net</th></tr></thead><tbody>${s.by_symbol.map((x) => `<tr><td><strong>${esc(x.symbol)}</strong></td><td class="mono">${x.trades}</td>
+        <td class="mono">${num(x.win_rate, 0)}%</td><td class="mono r ${x.net < 0 ? "bad" : "ok"}">${money(x.net)}</td></tr>`).join("") || '<tr><td colspan="4" class="mute">No closed trades in this period.</td></tr>'}</tbody></table></div></section>
+      <section class="card"><div class="hd"><h2>${esc(VLABEL[v])} recent trades</h2></div><div class="tw"><table style="min-width:520px"><tbody>${s.recent.map((p) => `<tr><td>${esc(p.symbol)} <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
+        <td class="mono">${num(p.lots, 2)} lots</td><td class="mono">${esc(p.entry)} → ${esc(p.close_price)}</td><td class="mono ${p.profit < 0 ? "bad" : "ok"}">${money(p.profit)}</td><td class="mono mute">${hm(p.closed_at)}</td></tr>`).join("") || '<tr><td class="mute">Nothing closed yet.</td></tr>'}</tbody></table></div></section></div>
+      <div class="col-side"><section class="card"><div class="hd"><h2>${esc(VLABEL[v])} statistics</h2></div>
+      ${kv("Net P/L", money(s.net), s.net < 0 ? "bad" : "ok")}${kv("Today / 7 days", money(s.today) + " / " + money(s.week))}${kv("Open now", s.open_count + " · floating " + money(s.floating))}
+      ${kv("Trades (won / lost)", s.trades + " (" + s.wins + " / " + s.losses + ")")}${kv("Win rate", num(s.win_rate, 1) + "%")}
+      ${kv("Profit factor", s.profit_factor == null ? "–" : num(s.profit_factor, 2))}${kv("Average win / loss", money(s.avg_win) + " / " + money(s.avg_loss))}
+      ${kv("Expectancy per trade", money(s.expectancy))}${kv("Best / worst", money(s.best) + " / " + money(s.worst))}${kv("Max drawdown", money(s.max_drawdown), s.max_drawdown ? "bad" : "")}</section></div></div>`;
+  }
+  $app.innerHTML = html;
+}
+
 /* ------------------------------------------------------------ router */
 async function render() {
   if (busy) return;
   busy = true;
   try {
     const m = location.hash.match(/^#\/signal\/(\d+)/);
-    await (m ? detail(m[1]) : desk());
+    await (m ? detail(m[1]) : location.hash === "#/reports" ? reports() : desk());
   } catch (e) {
     if (!$app.querySelector("header")) $app.innerHTML = `<p class="bad" style="padding:40px 0">Could not load: ${esc(e.message)}</p>`;
     else toast(e.message, true);
@@ -226,4 +263,4 @@ async function render() {
 }
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 render();
-timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal")) render(); }, 10000);
+timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports") render(); }, 10000);

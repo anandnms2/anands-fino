@@ -215,7 +215,7 @@ def _run_cycle(force: bool) -> dict:
         weights = cfg.weights_dict
         for k, v in factors.items():
             v["weight"] = weights.get(k, 0)
-        comb = scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree)
+        comb = scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None)
 
         def mk(venue: str = "") -> Signal:
             return Signal(cycle_id=cycle_id, symbol=sym, candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
@@ -228,7 +228,10 @@ def _run_cycle(force: bool) -> dict:
             why = []
             if abs(comb["score"]) < cfg.score_threshold:
                 why.append(f"score {comb['score']:+.1f} is inside the ±{cfg.score_threshold:g} threshold")
-            if comb["agree"] < cfg.min_agree:
+            pct = comb["agree"] / comb["available"] * 100 if comb["available"] else 0
+            if cfg.min_agree_pct and pct < cfg.min_agree_pct - 1e-9 or comb["available"] < 3:
+                why.append(f"{comb['agree']} of {comb['available']} factors agree ({pct:.0f}%), {cfg.min_agree_pct:g}% needed")
+            elif not cfg.min_agree_pct and comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
             sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
@@ -580,5 +583,5 @@ def state() -> dict:
                   "freellm_url": bool(cfg.freellmapi_base_url)},
         "events": collectors.upcoming_events(),
         "symbols": cfg.symbol_list,
-        "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "min_rr": cfg.min_rr},
+        "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},
     }

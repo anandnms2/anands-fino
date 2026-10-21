@@ -67,3 +67,12 @@ def test_blackout_fails_closed_without_fresh_calendar():
     assert blocked and "not loaded" in why
     collectors.save_snapshot("calendar", [])
     assert collectors.blackout("XAUUSD")[0] is False
+
+
+def test_agree_percentage_rule():
+    from app.scoring import combine
+    w = {"a": 1, "b": 1, "c": 1, "d": 1, "e": 1}
+    f = lambda *s: {k: {"score": v} for k, v in zip("abcde", s)}  # noqa: E731
+    # 3 of 5 agree is 60%: allowed. 2 of 5 (40%) is not.
+    assert combine(f(60, 60, 60, -5, -5), w, 20, 4, 60)["bias"] == "BUY"
+    assert combine(f(80, 80, -5, -5, -5), w, 20, 4, 60)["bias"] == "NONE"

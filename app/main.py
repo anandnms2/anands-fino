@@ -164,6 +164,58 @@ def api_positions():
         return {"open": [pos_row(p) for p in opened], "closed": [pos_row(p) for p in closed]}
 
 
+@app.get("/api/report")
+def api_report(venue: str = "", days: int = 0):
+    """Trading report from closed trades (plus open floating P/L), per venue or for all three."""
+    from datetime import timedelta
+
+    rows = []
+    with session() as s:
+        q = select(Position).where(Position.status == "closed").order_by(Position.closed_at)
+        if venue:
+            q = q.where(Position.venue == venue)
+        if days:
+            q = q.where(Position.closed_at >= engine.utcnow() - timedelta(days=days))
+        rows = s.scalars(q).all()
+        open_q = select(Position).where(Position.status == "open")
+        if venue:
+            open_q = open_q.where(Position.venue == venue)
+        opens = s.scalars(open_q).all()
+    def stats(items):
+        pl = [p.profit or 0.0 for p in items]
+        wins, losses = [x for x in pl if x > 0], [x for x in pl if x < 0]
+        cum, peak, dd, curve = 0.0, 0.0, 0.0, []
+        for p, x in zip(items, pl):
+            cum += x
+            peak = max(peak, cum)
+            dd = max(dd, peak - cum)
+            curve.append({"t": iso(p.closed_at), "pl": round(cum, 2)})
+        gl = -sum(losses)
+        return {"trades": len(pl), "wins": len(wins), "losses": len(losses), "win_rate": (len(wins) / len(pl) * 100) if pl else 0.0,
+                "net": round(sum(pl), 2), "gross_profit": round(sum(wins), 2), "gross_loss": round(-gl, 2),
+                "profit_factor": round(sum(wins) / gl, 2) if gl else (None if not wins else 999.0),
+                "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0, "avg_loss": round(-gl / len(losses), 2) if losses else 0.0,
+                "best": round(max(pl), 2) if pl else 0.0, "worst": round(min(pl), 2) if pl else 0.0,
+                "expectancy": round(sum(pl) / len(pl), 2) if pl else 0.0, "max_drawdown": round(dd, 2), "curve": curve}
+    out = {"venues": {}, "days": days}
+    for v in ([venue] if venue else list(venues.VENUES)):
+        mine = [p for p in rows if p.venue == v]
+        st = stats(mine)
+        now = engine.utcnow()
+        st["today"] = round(sum(p.profit or 0 for p in mine if p.closed_at and p.closed_at.date() == now.date()), 2)
+        st["week"] = round(sum(p.profit or 0 for p in mine if p.closed_at and (now - (p.closed_at if p.closed_at.tzinfo else p.closed_at.replace(tzinfo=now.tzinfo))).days < 7), 2)
+        st["open_count"] = sum(1 for p in opens if p.venue == v)
+        st["floating"] = round(sum(p.floating for p in opens if p.venue == v), 2)
+        by = {}
+        for p in mine:
+            by.setdefault(p.symbol, []).append(p)
+        st["by_symbol"] = sorted(({"symbol": k, "trades": len(x), "net": round(sum(i.profit or 0 for i in x), 2),
+                                   "win_rate": sum(1 for i in x if (i.profit or 0) > 0) / len(x) * 100} for k, x in by.items()), key=lambda r: -r["net"])
+        st["recent"] = [pos_row(p) for p in reversed(mine[-25:])]
+        out["venues"][v] = st
+    return out
+
+
 @app.get("/api/approvals")
 def api_approvals():
     with session() as s:
