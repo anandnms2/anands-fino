@@ -184,8 +184,9 @@ class Settings(BaseSettings):
 # "fast" trades often: looser entry filters and a short Claude cooldown. The loss limits, the news blackout, the stop
 # and spread cost checks, Claude's YES/NO and the Live lock are the same in both profiles.
 PROFILES = {
-    "fast": {"score_threshold": 20.0, "min_agree_pct": 50.0, "min_atr_to_spread": 1.5, "max_stop_atr": 4.0, "auto_tf_atr_spreads": 2.5,
-             "claude_cooldown_min": 5, "min_confidence": 0.55, "max_open": 5, "min_rr": 1.3},
+    "fast": {"score_threshold": 20.0, "min_agree_pct": 50.0, "min_atr_to_spread": 1.5, "max_stop_atr": 2.5, "auto_tf_atr_spreads": 2.5,
+             "claude_cooldown_min": 5, "min_confidence": 0.55, "max_open": 5, "min_rr": 1.1,
+             "stop_atr_mult": 1.0, "rr_target": 1.5, "max_tp_atr": 1.5},
     "normal": {},
 }
 

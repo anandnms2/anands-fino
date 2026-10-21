@@ -367,7 +367,7 @@ async function settings() {
   const st = await api("/api/state"); S.st = st; renderBar();
   const r = st.risk, th = st.thresholds, V = Object.values(st.venues), u = st.usage, ag = st.feeds.ages_min, fast = st.profile === "fast";
   const rail = [["venues", "Venues"], ["profile", "Trading profile"], ["risk", "Risk limits"], ["ai", "Claude and rules"], ["trailing", "Trailing stop"], ["symbols", "Symbols"], ["feeds", "Feeds and keys"], ["danger", "Danger zone"]];
-  const prof = [["Score needed", "±20", "±35"], ["Factors that must agree", "50%", "60%"], ["Candle must move (spreads)", "1.5", "2"], ["Stop no wider than (ATR)", "4", "3.5"], ["Auto chart climbs below (spreads)", "2.5", "3"], ["Claude re-asked after NO", "5 min", "15 min"], ["Claude confidence needed", "0.55", "0.60"], ["Max open trades", "5", "3"], ["Minimum reward : risk", "1.3", "1.5"]];
+  const prof = [["Score needed", "±20", "±35"], ["Factors that must agree", "50%", "60%"], ["Candle must move (spreads)", "1.5", "2"], ["Stop no wider than (ATR)", "2.5", "3.5"], ["Default stop / target (ATR)", "1.0 / 1.5", "1.5 / 3.0"], ["Auto chart climbs below (spreads)", "2.5", "3"], ["Claude re-asked after NO", "5 min", "15 min"], ["Claude confidence needed", "0.55", "0.60"], ["Max open trades", "5", "3"], ["Minimum reward : risk", "1.1", "1.5"]];
   const all = Array.from(new Set(st.symbols_default.concat(st.symbols)));
   const kv = (a, b) => `<div class="kv"><span>${a}</span><span class="mono">${b}</span></div>`;
   const feed = (n, ok, extra) => `<div class="kv"><span><span class="dot ${ok ? "g" : "r"}"></span>${n}</span><span class="mono mute">${extra}</span></div>`;
