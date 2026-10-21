@@ -310,7 +310,14 @@ def test_stream_payload_has_prices_and_live_positions():
         s.add(Position(ticket=tk, venue="demo", symbol="XAUUSD", side="BUY", lots=0.1, entry=100.0, sl=90.0, tp=120.0, risk_usd=10, opened_at=utcnow()))
         s.commit()
     import asyncio
-    chunk = asyncio.run(api_stream().body_iterator.__anext__())
+    async def first_chunk():
+        it = api_stream().body_iterator
+        try:
+            return await it.__anext__()
+        finally:
+            await it.aclose()   # an abandoned stream would otherwise complain when garbage-collected, and fail an unrelated later test
+
+    chunk = asyncio.run(first_chunk())
     d = _json.loads(chunk.split("data: ", 1)[1])
     assert "XAUUSD" in d["px"]["demo"] and d["pos"] and d["pos"][0]["ticket"] == tk and "floating" in d["pos"][0]
 
