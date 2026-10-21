@@ -36,7 +36,15 @@ def free_chat(system: str, user: str, max_tokens: int = 900) -> str:
             "model": s.freellmapi_model, "temperature": 0.1, "max_tokens": max_tokens,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        try:
+            return r.json()["choices"][0]["message"]["content"]
+        except ValueError:
+            snippet = " ".join(r.text[:120].split())
+            raise LLMError(f"FreeLLMAPI did not return JSON from {url} (HTTP {r.status_code}, "
+                           f"{r.headers.get('content-type', '?')}): {snippet!r}. "
+                           "FREELLMAPI_BASE_URL probably points at the web UI, not the API (usually ends in /v1)") from None
+    except LLMError:
+        raise
     except Exception as e:  # noqa: BLE001
         raise LLMError(f"FreeLLMAPI call failed: {type(e).__name__}: {e}") from e
 
