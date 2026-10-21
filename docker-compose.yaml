@@ -40,7 +40,7 @@ services:
       - "8000"
 
   mt5:
-    image: gmag11/metatrader5_vnc:latest
+    build: ./mt5   # gmag11/metatrader5_vnc plus a fix that pins the bridge library (see mt5/10-pin-mt5linux.sh)
     restart: unless-stopped
     environment:
       - SERVICE_FQDN_MT5_3000
