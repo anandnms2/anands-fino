@@ -327,6 +327,8 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             pre = evaluate(confidence=None, **gate_args[v])
             if pre["ok"]:
                 passed.append(v)
+            elif _repeat_block(sym, v, tf, pre):
+                outcome.append(f"{v}:gate_blocked")   # same reason as last time: no new row, no new journal line
             else:
                 vs = mk(v)
                 vs.levels, vs.gate = vlevels[v], pre
@@ -378,6 +380,18 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             vctx[v]["positions"] = open_positions_view(v)
         results[sym] = ", ".join(outcome)
     return results
+
+
+def _repeat_block(sym: str, venue: str, tf: int, gate: dict) -> bool:
+    """True when the previous signal for this symbol, venue and timeframe was blocked by the same checks within the last 30 minutes."""
+    failed = sorted(c["name"].split(" ")[0:3].__str__() for c in gate.get("checks", []) if not c["ok"])
+    with session() as s:
+        last = s.scalars(select(Signal).where(Signal.symbol == sym, Signal.venue == venue, Signal.timeframe == tf_label(tf))
+                         .order_by(Signal.id.desc()).limit(1)).first()
+    if last is None or last.status != "gate_blocked" or _aware(last.ts) < utcnow() - timedelta(minutes=30):
+        return False
+    prev = sorted(c["name"].split(" ")[0:3].__str__() for c in (last.gate or {}).get("checks", []) if not c["ok"])
+    return bool(failed) and failed == prev
 
 
 def prune() -> None:

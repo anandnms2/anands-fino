@@ -226,3 +226,17 @@ def test_symbols_editable_from_dashboard(monkeypatch):
     assert c.get("/api/state", auth=a).json()["symbols_custom"] is True
     assert c.post("/api/symbols", auth=a, headers=H, json={"symbols": "bad!"}).status_code == 400
     assert c.post("/api/symbols", auth=a, headers=H, json={"reset": True}).json()["symbols"] == ["EURUSD", "GBPUSD"]
+
+
+def test_same_gate_block_is_not_journaled_every_minute(monkeypatch):
+    force_buy(monkeypatch); yes(monkeypatch)
+    monkeypatch.setenv("MAX_SPREAD_TO_STOP", "0.0000001")   # every trade fails the spread check
+    from app.config import get_settings
+    get_settings.cache_clear()
+    engine.run_cycle(force=True)
+    with session() as s:
+        n1 = len(s.scalars(select(Signal).where(Signal.status == "gate_blocked")).all())
+    assert n1 >= 1
+    engine.run_cycle(force=True)
+    with session() as s:
+        assert len(s.scalars(select(Signal).where(Signal.status == "gate_blocked")).all()) == n1
