@@ -75,7 +75,8 @@ def open_positions_view(venue: str | None = None) -> list[dict]:
             q = q.where(Position.venue == venue)
         return [{"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl,
                  "tp": p.tp, "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price,
-                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl} for p in s.scalars(q).all()]
+                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl,
+                 "watch": _watch.get((p.venue, p.ticket))} for p in s.scalars(q).all()]
 
 
 def profit_rate(broker, info: dict, account: dict) -> float | None:
@@ -187,6 +188,30 @@ def _run_cycle(force: bool) -> dict:
     return {"ok": True, "cycle_id": cycle_id, "results": results}
 
 
+def _score_all(cfg: Settings, techs: dict, macro, cot, news24) -> dict:
+    """{symbol: (factors, combined)}: the seven factor scores and the weighted verdict for every symbol in `techs`."""
+    prep = {}
+    for sym, tech in techs.items():
+        factors = {
+            "trend": {**tech["trend"], "source": "code"},
+            "pattern": {**tech["pattern"], "source": "code"},
+            "momentum": {**tech["momentum"], "source": "code"},
+        }
+        sc, rd = scoring.macro_score(sym, macro)
+        factors["macro"] = {"score": sc, "reading": rd, "source": "FRED"}
+        sc, rd = scoring.news_score(sym, news24)
+        factors["news"] = {"score": sc, "reading": rd, "source": "FreeLLMAPI"}
+        sc, rd = scoring.positioning_score(sym, cot)
+        factors["positioning"] = {"score": sc, "reading": rd, "source": "CFTC"}
+        sc, rd = scoring.intermarket_score(sym, techs)
+        factors["intermarket"] = {"score": sc, "reading": rd, "source": "code"}
+        weights = cfg.weights_dict
+        for k, v in factors.items():
+            v["weight"] = weights.get(k, 0)
+        prep[sym] = (factors, scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None))
+    return prep
+
+
 def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> dict | None:
     """One analysis pass on `tf` minute candles for the venues in `vctx`; returns {symbol: outcome}."""
     # one set of candles for the analysis: a trading venue's broker if there is one, else demo or the paper feed
@@ -258,25 +283,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
                     for n in s.scalars(select(NewsItem).where(NewsItem.central_bank == 1, NewsItem.published >= utcnow() - timedelta(hours=48)).order_by(NewsItem.published.desc()).limit(6))]
 
     results = {}
-    prep = {}
-    for sym, tech in techs.items():
-        factors = {
-            "trend": {**tech["trend"], "source": "code"},
-            "pattern": {**tech["pattern"], "source": "code"},
-            "momentum": {**tech["momentum"], "source": "code"},
-        }
-        sc, rd = scoring.macro_score(sym, macro)
-        factors["macro"] = {"score": sc, "reading": rd, "source": "FRED"}
-        sc, rd = scoring.news_score(sym, news24)
-        factors["news"] = {"score": sc, "reading": rd, "source": "FreeLLMAPI"}
-        sc, rd = scoring.positioning_score(sym, cot)
-        factors["positioning"] = {"score": sc, "reading": rd, "source": "CFTC"}
-        sc, rd = scoring.intermarket_score(sym, techs)
-        factors["intermarket"] = {"score": sc, "reading": rd, "source": "code"}
-        weights = cfg.weights_dict
-        for k, v in factors.items():
-            v["weight"] = weights.get(k, 0)
-        prep[sym] = (factors, scoring.combine(factors, weights, cfg.score_threshold, cfg.min_agree, cfg.min_agree_pct or None))
+    prep = _score_all(cfg, techs, macro, cot, news24)
 
     # strongest setups first, so the open-trade slots go to the best of the 13 rather than the first in the list
     for sym in sorted(prep, key=lambda s: -abs(prep[s][1]["score"])):
@@ -582,6 +589,134 @@ def close_position(ticket: int, venue: str = "demo") -> None:
     reconcile()
 
 
+# ---------------------------------------------------------------- reversal watch
+_watch: dict = {}   # (venue, ticket) -> the latest re-score of an open trade, shown in the terminal
+
+
+def watch_on(cfg: Settings) -> bool:
+    return kv_get("watch") is True or (kv_get("watch") is None and cfg.watch_on)
+
+
+def _tech_ladder(cfg: Settings, broker, bsym: str, info: dict, tick: dict, tf: int):
+    """Technicals on the auto chart: start at `tf` and climb to bigger candles while one candle moves less than a few spreads. Returns (tech, tf_used, closed candles)."""
+    spread = max(tick["ask"] - tick["bid"], 0.0)
+    t = tf
+    while True:
+        df = broker.rates(bsym, 3500 if t <= 1 else 500 if t >= 30 else 1500, t)
+        closed = df.iloc[:-1].reset_index(drop=True)
+        if len(closed) < MIN_CANDLES:
+            raise BrokerError(f"only {len(closed)} candles, need {MIN_CANDLES}")
+        tech = compute_technicals(closed, info["digits"], t)
+        nxt = next((x for x in V.TIMEFRAMES if x > t and x <= max(cfg.auto_tf_max, tf)), None)
+        if cfg.auto_tf and nxt and spread > 0 and tech["atr"] < cfg.auto_tf_atr_spreads * spread:
+            t = nxt
+            continue
+        return tech, t, closed
+
+
+def analysis_for(symbol: str, venue: str) -> dict:
+    """Every indicator and factor behind the verdict for one symbol, computed now (the terminal shows this by default)."""
+    from .scoring import PEERS
+
+    cfg = get_settings()
+    broker = get_broker(venue)
+    broker.connect()
+    techs, meta = {}, {}
+    for s in {symbol, PEERS.get(symbol, (symbol,))[0]}:
+        if s not in cfg.symbol_list:
+            continue
+        bsym = cfg.broker_symbol(s)
+        info, tick = broker.symbol_info(bsym), broker.tick(bsym)
+        tech, t, _ = _tech_ladder(cfg, broker, bsym, info, tick, V.venue_tf(venue))
+        techs[s], meta[s] = tech, (t, info["digits"])
+    macro = (collectors.snapshot("macro") or {}).get("data")
+    cot = (collectors.snapshot("cot") or {}).get("data")
+    with session() as s:
+        news24 = list(s.scalars(select(NewsItem).where(NewsItem.published >= utcnow() - timedelta(hours=24))))
+    factors, comb = _score_all(cfg, techs, macro, cot, news24)[symbol]
+    tech = techs[symbol]
+    f = lambda v: None if v is None else round(float(v), meta[symbol][1] + 1)  # noqa: E731
+    return {"symbol": symbol, "venue": venue, "tf": meta[symbol][0], "tf_label": tf_label(meta[symbol][0]),
+            "score": comb["score"], "bias": comb["bias"], "agree": comb["agree"], "available": comb["available"],
+            "threshold": cfg.score_threshold, "agree_pct": cfg.min_agree_pct,
+            "factors": factors,
+            "ind": {"close": f(tech["close"]), "ema20": f(tech["ema20"]), "ema50": f(tech["ema50"]), "ema200": f(tech["ema200"]),
+                    "rsi": round(tech["rsi"], 1), "macd_hist": f(tech["macd_hist"]), "macd_hist_prev": f(tech["macd_hist_prev"]),
+                    "atr": f(tech["atr"]), "htf": tech.get("htf"), "pattern": tech.get("pattern_name"),
+                    "swing_highs": [f(x) for x in tech["swing_highs"]], "swing_lows": [f(x) for x in tech["swing_lows"]]}}
+
+
+def watch_positions() -> None:
+    """Re-score every open trade on all seven factors, news sentiment included. When the verdict turns against the trade, protect the profit; when it is confirmed, close."""
+    cfg = get_settings()
+    opens = open_positions_view()
+    live_keys = {(p["venue"], p["ticket"]) for p in opens}
+    for k in [k for k in _watch if k not in live_keys]:
+        _watch.pop(k, None)
+    if not opens or not watch_on(cfg):
+        return
+    from .scoring import PEERS
+
+    macro = (collectors.snapshot("macro") or {}).get("data")
+    cot = (collectors.snapshot("cot") or {}).get("data")
+    with session() as s:
+        news24 = list(s.scalars(select(NewsItem).where(NewsItem.published >= utcnow() - timedelta(hours=24))))
+    for p in opens:
+        v, sym, tk = p["venue"], p["symbol"], p["ticket"]
+        try:
+            broker = get_broker(v)
+            broker.connect()
+            techs = {}
+            for s_ in {sym, PEERS.get(sym, (sym,))[0]}:
+                bsym = cfg.broker_symbol(s_)
+                info, tick = broker.symbol_info(bsym), broker.tick(bsym)
+                techs[s_] = _tech_ladder(cfg, broker, bsym, info, tick, V.venue_tf(v))[0]
+            factors, comb = _score_all(cfg, techs, macro, cot, news24)[sym]
+        except BrokerError:
+            continue
+        buy = p["side"] == "BUY"
+        sg = 1 if buy else -1
+        signed = comb["score"] * sg
+        against = [k for k, f in factors.items() if f["score"] is not None and f["score"] * sg < -10]
+        r = abs(p["entry"] - p["sl0"]) or 1e-9
+        lp = p.get("last_price") or p["entry"]
+        gain = sg * (lp - p["entry"]) / r
+        prev = _watch.get((v, tk), {})
+        status = "reversal" if signed <= -cfg.watch_exit_score and len(against) >= 3 else "reversing" if signed <= -cfg.score_threshold else "holding" if signed < cfg.score_threshold else "aligned"
+        streak = prev.get("streak", 0) + 1 if status == "reversal" else 0
+        action = prev.get("action", "")
+        if status in ("reversal", "reversing") and gain >= 0.4:
+            want = p["entry"] + sg * 0.1 * r
+            if gain >= 1.0:
+                want = lp - sg * 0.4 * r
+            if (want - p["sl"]) * sg > 0.05 * r:
+                try:
+                    info = broker.symbol_info(cfg.broker_symbol(sym))
+                    want = round(want, info["digits"])
+                    broker.modify_sltp(tk, want, p["tp"])
+                    with session() as s:
+                        row = s.get(Position, (tk, v))
+                        if row is not None:
+                            row.sl0 = row.sl0 or row.sl
+                            row.sl = want
+                            s.commit()
+                    action = f"view turned against the trade ({signed:+.0f}); stop tightened to {want:g}"
+                    log(f"[{V.LABEL[v]}] {sym} #{tk}: {action}", "trade", sym)
+                except BrokerError as e:
+                    log(f"[{V.LABEL[v]}] {sym} #{tk}: could not tighten the stop ({e})", "warn", sym)
+        if status == "reversal" and streak >= cfg.watch_confirm:
+            action = f"reversal confirmed ({signed:+.0f}, {', '.join(against)} against): closed at {gain:+.1f}R"
+            log(f"[{V.LABEL[v]}] {sym} #{tk}: {action}", "trade", sym)
+            notify(f"{sym} {p['side']} closed on a confirmed reversal ({gain:+.1f}R)")
+            try:
+                close_position(tk, v)
+            except BrokerError as e:
+                log(f"[{V.LABEL[v]}] {sym} #{tk}: close on reversal failed ({e})", "error", sym)
+        _watch[(v, tk)] = {"ts": iso(utcnow()), "score": round(comb["score"], 1), "signed": round(signed, 1), "status": status, "streak": streak,
+                           "against": against, "action": action, "gain_r": round(gain, 2),
+                           "factors": {k: {"score": f["score"], "reading": f["reading"]} for k, f in factors.items()}}
+
+
 # ---------------------------------------------------------------- reconcile and kill switch
 def reconcile() -> None:
     """Sync open positions with each venue's broker, book closed trades, and pause a venue when its limits are hit."""
@@ -750,6 +885,7 @@ def state() -> dict:
         "symbols": cfg.symbol_list, "symbols_custom": bool(kv_get("symbols")), "symbols_default": [s.strip().upper() for s in cfg.symbols.split(",") if s.strip()],
         "trail": (kv_get("trail") is True) or (kv_get("trail") is None and cfg.trail_on),
         "claude_veto": kv_get("claude_veto") is True,
+        "watch": watch_on(cfg),
         "profile": __import__("app.config", fromlist=["x"]).profile_name(),
         "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},
     }

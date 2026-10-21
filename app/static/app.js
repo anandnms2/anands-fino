@@ -52,7 +52,7 @@ function scoreBar(score) {
 
 /* ------------------------------------------------------------ live state (terminal) */
 const $bar = document.getElementById("bar");
-const S = { venue: localStorage.getItem("fv") || "paper", sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
+const S = { an: {}, venue: localStorage.getItem("fv") || "paper", sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
   st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
 const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
 const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
@@ -207,7 +207,7 @@ async function loadCandles() {
   if (!S.sym || key === S.candleKey) return;
   S.candleKey = key;
   try {
-    const r = await api(`/api/candles?symbol=${S.sym}&tf=${S.tf}&venue=${S.venue}&n=140`);
+    const r = await api(`/api/candles?symbol=${S.sym}&tf=${S.tf}&venue=${S.venue}&n=400`);
     if (key !== S.candleKey) return;
     S.candles = r.candles; $("cfoot").textContent = "";
   } catch (e) { S.candles = []; $("cfoot").textContent = "No candles: " + e.message; }
@@ -229,6 +229,8 @@ function drawChart() {
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
   const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
   const PAD = 76, slot = 8, n = Math.max(10, Math.floor((w - PAD - 12) / slot)), view = S.candles.slice(-n);
+  const emaOf = (k) => { const a = 2 / (k + 1), out = []; let e = null; for (const c of S.candles) { e = e == null ? c[4] : e + a * (c[4] - e); out.push(e); } return out.slice(-view.length); };
+  const EMAS = S.candles.length > 60 ? [[20, "#F58A14"], [50, "#5AA9E6"], [200, "#B48CF2"]].map(([k, col]) => [k, col, emaOf(k)]) : [];
   if (view.length < 2) { g.fillStyle = "#9C9EA6"; g.font = "13px Inter,sans-serif"; g.fillText("Loading candles…", 16, 28); return; }
   const P = openPos(S.sym), d = dig(S.sym);
   let lo = Math.min(...view.map((c) => c[3])), hi = Math.max(...view.map((c) => c[2]));
@@ -242,6 +244,8 @@ function drawChart() {
     g.strokeStyle = col; g.fillStyle = col; g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
     const t = Y(Math.max(c[1], c[4])), hh = Math.max(1, Math.abs(Y(c[1]) - Y(c[4]))); g.fillRect(x - 2.5, t, 5, hh);
   });
+  EMAS.forEach(([k, col, arr]) => { g.strokeStyle = col; g.lineWidth = 1.2; g.beginPath(); arr.forEach((v, i) => { const x = x0 + i * slot + slot / 2; i ? g.lineTo(x, Y(v)) : g.moveTo(x, Y(v)); }); g.stroke(); g.lineWidth = 1; });
+  EMAS.forEach(([k, col], i) => { g.fillStyle = col; g.textAlign = "left"; g.fillText("EMA " + k, 10 + i * 70, 16); });
   const tag = (v, col, bg, txt, dash) => { const y = Y(v); g.strokeStyle = col; g.setLineDash(dash || []); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]);
     const t = txt + " " + v.toFixed(d), tw = g.measureText(t).width + 10; g.fillStyle = bg; g.fillRect(w - PAD - tw - 4, y - 9, tw, 18); g.fillStyle = col; g.textAlign = "left"; g.fillText(t, w - PAD - tw + 1, y); };
   if (P) {
@@ -256,15 +260,51 @@ function drawChart() {
 window.addEventListener("resize", queueDraw);
 
 /* decision panel */
+const WSTAT = { aligned: ["Aligned with the trade", "ok"], holding: ["Holding, view neutral", "mute"], reversing: ["View turning against the trade", "warn"], reversal: ["Reversal building", "bad"] };
+function loadAn() {
+  const k = S.venue + ":" + S.sym, c = S.an[k];
+  if (c && Date.now() - c.t < 15000) return;
+  if (c && c.busy) return;
+  S.an[k] = { ...(c || {}), busy: true, t: c ? c.t : 0 };
+  api("/api/analysis?symbol=" + S.sym + "&venue=" + S.venue).then((d) => { S.an[k] = { t: Date.now(), d }; if (pageName() === "terminal") renderSide(); })
+    .catch((e) => { S.an[k] = { t: Date.now(), err: String(e.message || e), d: (S.an[k] || {}).d }; if (pageName() === "terminal") renderSide(); });
+}
+function indCard() {
+  const c = S.an[S.venue + ":" + S.sym]; if (!c) return `<section class="card"><div class="hd"><h2>Indicators · ${esc(S.sym)}</h2></div><div class="pad mute">Reading the market...</div></section>`;
+  if (!c.d) return `<section class="card"><div class="hd"><h2>Indicators · ${esc(S.sym)}</h2></div><div class="pad mute">${esc(c.err || "No data")}</div></section>`;
+  const d = c.d, i = d.ind, p = (v) => pxs(v, S.sym), up = (a, b) => (a > b ? "ok" : "bad");
+  const rsiC = i.rsi > 70 ? "bad" : i.rsi < 30 ? "ok" : "";
+  const row = (a, b, cls) => `<div class="row sm"><span>${a}</span><span class="mono ${cls || ""}">${b}</span></div>`;
+  return `<section class="card"><div class="hd"><h2>Indicators · ${esc(d.tf_label)}</h2><span class="mono mute">live</span></div>
+    ${row("EMA 20", p(i.ema20), up(i.close, i.ema20))}${row("EMA 50", p(i.ema50), up(i.close, i.ema50))}${row("EMA 200", p(i.ema200), up(i.close, i.ema200))}
+    ${row("Higher timeframe", esc(i.htf || "n/a"), i.htf ? (/up/.test(i.htf) ? "ok" : "bad") : "mute")}
+    ${row("RSI 14", i.rsi.toFixed(1), rsiC)}${row("MACD histogram", (i.macd_hist >= 0 ? "+" : "") + i.macd_hist + (i.macd_hist > i.macd_hist_prev ? " ▲" : " ▼"), i.macd_hist >= 0 ? "ok" : "bad")}
+    ${row("ATR 14", p(i.atr))}${row("Candle pattern", esc(i.pattern || "none"), i.pattern ? (/bull/.test(i.pattern) ? "ok" : "bad") : "mute")}
+    ${row("Swing highs", (i.swing_highs || []).slice(-2).map(p).join(" · ") || "–")}${row("Swing lows", (i.swing_lows || []).slice(-2).map(p).join(" · ") || "–")}
+    <div class="pad" style="padding-top:6px">${Object.entries(d.factors).map(([k, f]) => `<div class="fread"><b style="text-transform:capitalize">${esc(k)}</b> <span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "n/a" : signed(f.score, 0)}</span><div class="mute" style="font-size:11.5px">${esc(f.reading)}</div></div>`).join("")}</div></section>`;
+}
+function watchCard() {
+  const p = openPos(S.sym); if (!p) return "";
+  const w = p.watch, on = S.st.watch;
+  if (!w) return `<section class="card"><div class="hd"><h2>Reversal watch</h2><span class="pill none">${on ? "starting" : "off"}</span></div><div class="pad mute">${on ? "The first re-score of this trade lands within 30 seconds." : "Switched off in Settings."}</div></section>`;
+  const [t, cls] = WSTAT[w.status] || [w.status, "mute"];
+  return `<section class="card"><div class="hd"><h2>Reversal watch · ${esc(p.side)}</h2><span class="mono mute">${hm(w.ts)}</span></div>
+    <div class="pad"><div style="display:flex;justify-content:space-between;align-items:baseline"><span class="${cls}"><b>${esc(t)}</b></span><b class="mono big2 ${w.signed >= 0 ? "ok" : "bad"}">${signed(w.signed, 0)}</b></div>
+    <div class="mute" style="font-size:12px;margin:2px 0 8px">Score seen from this trade's side. Negative means the market now favours the other way. ${w.against.length ? "Against: " + esc(w.against.join(", ")) + "." : ""}${w.streak ? " Confirmed " + w.streak + " check(s) in a row." : ""}</div>
+      ${Object.entries(w.factors).map(([k, f]) => { const v = f.score == null ? null : f.score * (p.side === "BUY" ? 1 : -1); return `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${v == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(v)}<span class="mono ${v > 0 ? "ok" : v < 0 ? "bad" : "mute"}">${v == null ? "–" : signed(v, 0)}</span></div>`; }).join("")}
+      ${w.action ? `<div class="lab">Last action</div><p>${esc(w.action)}</p>` : ""}</div></section>`;
+}
 async function renderSide() {
   const el = $("side"); if (!el) return;
+  S.an = S.an || {}; loadAn();
+  const top = watchCard() + indCard();
   const r = latestFor(S.sym);
-  if (!r) { el.innerHTML = `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2></div><div class="pad mute">No cycle has analysed this symbol yet.</div></section>`; return; }
+  if (!r) { el.innerHTML = top + `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2></div><div class="pad mute">No cycle has analysed this symbol yet.</div></section>`; return; }
   const vs = (r.venues || []).find((x) => x.venue === S.venue), id = vs ? vs.id : r.id;
   if (id !== S.detId) { try { S.det = await api("/api/signal/" + id); S.detId = id; } catch (e) { S.det = null; } }
-  const s = S.det; if (!s || !$("side")) return;
+  const s = S.det; if (!s || !$("side")) { if ($("side")) $("side").innerHTML = top; return; }
   const c = s.claude || {}, g = s.gate || {}, l = s.levels || {}, th = S.st.thresholds;
-  $("side").innerHTML = `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2><span class="mono mute">${hm(s.ts)}</span></div>
+  $("side").innerHTML = top + `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2><span class="mono mute">${hm(s.ts)}</span></div>
       <div class="pad"><div style="display:flex;justify-content:space-between;align-items:baseline"><span>Rules score ${biasPill(s.bias)}</span><b class="mono big2 ${s.score >= 0 ? "ok" : "bad"}">${signed(s.score, 1)}</b></div>
       <div class="mute" style="font-size:12px;margin:2px 0 8px">${s.agree}/${s.available} factors agree · needs ${th.agree_pct || 0}% and ±${th.score}</div>
       ${Object.entries(s.factors || {}).map(([k, f]) => `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${f.score == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(f.score)}<span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "–" : signed(f.score, 0)}</span></div>`).join("")}</div></section>
@@ -287,7 +327,7 @@ function renderBottom() {
   if (S.tab === "pos") {
     h = `<div class="tw"><div class="ptable"><div class="prow head"><span>SYMBOL</span><span>SIDE</span><span>LOTS</span><span>ENTRY</span><span>LIVE</span><span>STOP</span><span>STOP ◂ PRICE ▸ TARGET</span><span class="r">P/L</span><span class="r">R</span><span></span></div>
       ${mine.map((p) => `<div class="prow" data-k="${p.venue}:${p.ticket}" data-e="${p.entry}" data-sl="${p.sl}" data-tp="${p.tp}" data-side="${p.side}">
-        <span><b>${esc(p.symbol)}</b> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
+        <span><b>${esc(p.symbol)}</b> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
         <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span class="mono bad">${pxs(p.sl, p.symbol)}</span>
         <span class="pbar"><i class="pf"></i><i class="pn"></i></span><span class="mono r pl ${p.floating < 0 ? "bad" : "ok"}"><b>${money(p.floating)}</b></span><span class="mono r pr">–</span>
         <button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></div>`).join("") || '<div class="pad mute" style="padding-top:16px">Nothing open on this venue.</div>'}</div></div>`;
@@ -335,7 +375,7 @@ async function settings() {
       <div class="krow"><span>Trade</span>${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : swBtn(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}`, v.name === "live" && !v.on ? "Switch LIVE trading on? Real money on a real account." : "")}</div>
       <div class="krow"><span>Auto-approve</span>${v.locked ? "" : swBtn(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`, v.name === "live" && !v.auto ? "Auto-approve LIVE trades? Orders will go out without your click." : "")}</div>
       <div class="krow"><span>Chart candles</span><select aria-label="${esc(v.label)} candle size" onchange="act('/api/venue/${v.name}',{tf:Number(this.value)},'${esc(v.label)} candles set')">${st.timeframes.map((m) => `<option value="${m}" ${m === v.tf ? "selected" : ""}>${m === 60 ? "1 hour" : m + " min"}</option>`).join("")}</select></div>
-      ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset account…</button>` : v.name !== "paper" && v.connected === false ? `<a class="btn sm" href="/ctrader/connect">Connect cTrader</a>` : ""}</div>`).join("")}</div></section>
+      ${v.name === "paper" ? `<div class="krow"><span>Balance (USD)</span><span><input id="pbal" class="mono" type="number" min="100" step="100" value="${v.account ? Math.round(v.account.balance * 100) / 100 : 10000}" aria-label="Paper balance" style="width:120px;text-align:right"> <button class="btn sm pri" onclick="act('/api/paper/balance',{balance:Number($('pbal').value)},'Paper balance set')">Set</button></span></div><button class="btn sm" onclick="askAct('Reset the paper account? Balance returns to your set amount and history is cleared.','/api/paper/reset','Paper account reset')">Reset account…</button>` : v.name !== "paper" && v.connected === false ? `<a class="btn sm" href="/ctrader/connect">Connect cTrader</a>` : ""}</div>`).join("")}</div></section>
     <section class="card sec" id="s-profile"><h2>Trading profile</h2><p class="mute">Fast takes more trades with looser entry filters. Loss limits, news blackout, spread checks and the Live lock apply in both.</p>
       <div class="seg0"><button class="btn ${fast ? "pri" : ""}" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn ${fast ? "" : "pri"}" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div>
       <div class="ptab"><span class="lab">RULE</span><span class="lab r">FAST</span><span class="lab r">NORMAL</span>${prof.map(([a, f, n]) => `<span>${a}</span><span class="mono r ${fast ? "acc" : "mute"}">${f}</span><span class="mono r ${fast ? "mute" : "acc"}">${n}</span>`).join("")}</div></section>
@@ -346,6 +386,7 @@ async function settings() {
       ${kv("Score threshold", "±" + th.score)}${kv("Factors that must agree", th.agree_pct ? th.agree_pct + "%" : th.agree)}${kv("Claude calls today", `${u.claude} / ${u.claude_cap}`)}</section>
     <section class="card sec" id="s-trailing"><h2>Trailing stop</h2><p class="mute">R is the first stop distance. Locks profit as the trade moves your way.</p>
       <div class="krow big"><div><b>Trailing stop</b></div>${swBtn(st.trail, "Trailing stop", "/api/trail", `{on:${!st.trail}}`)}</div>
+      <div class="krow big"><div><b>Reversal watch</b><div class="mute" style="font-size:12px">Re-scores every open trade on all 7 factors (news sentiment included) every 30 s. When the view turns against the trade the stop is tightened to lock profit; when the flip is confirmed twice with 3+ factors against, the trade is closed.</div></div>${swBtn(st.watch, "Reversal watch", "/api/watch", `{on:${!st.watch}}`)}</div>
       <div class="note">At <b class="acc mono">+1.0R</b> the stop moves to break-even plus <b class="mono">0.2R</b>. From <b class="acc mono">+1.5R</b> it follows <b class="mono">0.75R</b> behind the price and the target moves <b class="mono">1.0R</b> ahead. The stop never loosens.</div></section>
     <section class="card sec" id="s-symbols"><h2>Symbols</h2><p class="mute">${st.symbols.length} traded. Toggle a symbol to include it from the next cycle.</p><div class="chips2">${all.map((s) => { const on = st.symbols.includes(s); const list = on ? st.symbols.filter((x) => x !== s) : st.symbols.concat([s]); return `<button class="sc ${on ? "on" : ""}" aria-pressed="${on}" onclick="act('/api/symbols',{symbols:'${list.join(",")}'},'Symbols saved')" ${on && st.symbols.length <= 1 ? "disabled" : ""}>${esc(s)}</button>`; }).join("")}</div>
       ${st.symbols_custom ? `<button class="btn sm" style="margin-top:12px" onclick="act('/api/symbols',{reset:true},'Back to the environment list')">Use environment list</button>` : ""}</section>
@@ -375,9 +416,8 @@ function chart(closes, l, bias) {
 async function detail(id) {
   const s = await api("/api/signal/" + id);
   const l = s.levels || {}, c = s.claude || {}, g = s.gate || {}, p = s.position;
-  let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>${esc(s.symbol)} ${biasPill(s.bias)}</h1>
-    <div class="lab">Signal #${s.id} · ${esc(s.candle_time)} · ${esc(VLABEL[s.venue] || "analysis")}${s.mode ? " · " + esc(s.mode.split(":")[1]) : ""}</div></div></div>
-    <div class="tools">${stPill(s.status)}<a class="btn" href="#/">Back to desk</a></div></header>
+  let html = pageHead(`${esc(s.symbol)} ${biasPill(s.bias)}`, `Signal #${s.id} · ${esc(s.candle_time)} · ${esc(VLABEL[s.venue] || "analysis")}${s.mode ? " · " + esc(s.mode.split(":")[1]) : ""}`, `${stPill(s.status)}<a class="btn" href="#/">Back to terminal</a>`)
+    + `
     <p class="mute" style="margin:0">${esc(s.reason)}</p>
     <div class="grid"><div class="col-main">
     <section class="card"><div class="hd"><h2>Price and levels</h2><span class="mono mute">last ${(s.context || {}).closes ? s.context.closes.length : 0} closed ${esc(s.timeframe || "H1")} candles</span></div><div class="pad">${chart((s.context || {}).closes, l, s.bias)}</div></section>
@@ -414,11 +454,20 @@ function curveSvg(c) {
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Cumulative profit and loss"><line x1="${P}" x2="${W - P}" y1="${y(0)}" y2="${y(0)}" stroke="#4A4A52" stroke-dasharray="4 4"/>
     <polyline points="${vals.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}" fill="none" stroke="${col}" stroke-width="1.8"/></svg>`;
 }
+const pageHead = (title, sub, tools) => `<div class="pagehead"><div><h1>${title}</h1><div class="lab">${sub}</div></div><div class="tools">${tools || ""}</div></div>`;
+/* stale-while-revalidate: show the last copy of a page's data at once, refresh it behind the scenes */
+const PC = {};
+async function cget(path) {
+  const hit = PC[path];
+  const fresh = api(path).then((d) => { const changed = !hit || JSON.stringify(hit) !== JSON.stringify(d); PC[path] = d; if (hit && changed && curPath === path) render(); return d; });
+  if (hit) { fresh.catch(() => {}); return hit; }
+  return fresh;
+}
+let curPath = "";
 async function reports() {
-  const r = await api("/api/report?days=" + repDays);
-  let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>Trading reports</h1><div class="lab">Paper · Demo · Live, closed trades after commission and swap</div></div></div>
-    <div class="tools"><span class="seg" style="padding:0">${[[0, "All time"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) => `<button aria-pressed="${repDays === d}" onclick="repDays=${d};render()">${l}</button>`).join("")}</span>
-    <a class="btn" href="#/">Back to desk</a></div></header>`;
+  curPath = "/api/report?days=" + repDays;
+  const r = await cget(curPath);
+  let html = pageHead("Trading reports", "Paper · Demo · Live, closed trades after commission and swap", `<span class="seg" style="padding:0">${[[0, "All time"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) => `<button aria-pressed="${repDays === d}" onclick="repDays=${d};render()">${l}</button>`).join("")}</span>`);
   const tot = Object.values(r.venues);
   html += `<section class="card strip">${Object.entries(r.venues).map(([v, s]) => `<div><div class="lab">${esc(VLABEL[v])} net P/L</div>
     <div class="v ${s.net < 0 ? "bad" : s.net > 0 ? "ok" : ""}">${money(s.net)}</div>
@@ -447,10 +496,9 @@ window.saveSpec = async (sym) => {
   render();
 };
 async function specs() {
-  const r = await api("/api/specs?venue=" + specVenue);
-  let html = `<header class="top"><div class="brand"><img src="/static/logo.png" alt=""><div><h1>Contract specifications</h1><div class="lab">What each venue's broker says a lot is, and what it costs to trade</div></div></div>
-    <div class="tools"><span class="seg" style="padding:0">${["paper", "demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>
-    <a class="btn" href="#/">Back to desk</a></div></header>`;
+  curPath = "/api/specs?venue=" + specVenue;
+  const r = await cget(curPath);
+  let html = pageHead("Contract specifications", "What each venue's broker says a lot is, and what it costs to trade", `<span class="seg" style="padding:0">${["paper", "demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>`);
   html += `<p class="mute" style="margin:0">${r.editable ? "Paper is a simulation, so you set the spread and contract here. Demo and Live show exactly what your cTrader account reports, read-only." : "Read from the cTrader account itself: contract size, digits, lot limits and the live spread are the broker's own, so metals, yen pairs and any non-standard symbol are sized from these numbers."}</p>`;
   if (r.error) html += `<div class="banner warn"><strong>${esc(VLABEL[specVenue])} not reachable.</strong><span class="mute">${esc(r.error)}</span></div>`;
   const inp = (id, sym, v, w) => `<input id="${id}_${sym}" value="${esc(v)}" style="width:${w}px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:12px var(--font-mono)">`;
@@ -473,15 +521,19 @@ async function specs() {
 }
 
 /* ------------------------------------------------------------ router */
+async function ensureSt() {
+  if (S.st) { renderBar(); api("/api/state").then((d) => { S.st = d; renderBar(); }).catch(() => {}); return; }
+  S.st = await api("/api/state"); renderBar();
+}
 async function render() {
   if (busy) return;
   busy = true;
   try {
     const pg = pageName();
     if (pg !== "terminal") { S.mounted = false; $app.className = "wrap"; }
-    if (pg === "signal") { S.st = S.st || await api("/api/state"); renderBar(); await detail(location.hash.match(/(\d+)/)[1]); }
-    else if (pg === "reports") { S.st = await api("/api/state"); renderBar(); await reports(); }
-    else if (pg === "specs") { S.st = await api("/api/state"); renderBar(); await specs(); }
+    if (pg === "signal") { await ensureSt(); await detail(location.hash.match(/(\d+)/)[1]); }
+    else if (pg === "reports") { await ensureSt(); await reports(); }
+    else if (pg === "specs") { await ensureSt(); await specs(); }
     else if (pg === "settings") await settings();
     else await terminal();
   } catch (e) {

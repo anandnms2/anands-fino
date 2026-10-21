@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
     if cfg.scheduler_enabled:
         # every minute; each venue only trades when a candle of its own timeframe has just closed
         scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute="*", second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
+        scheduler.add_job(job("watch", engine.watch_positions), "interval", seconds=cfg.watch_every_s, max_instances=1, coalesce=True)
         scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("news", refresh_news), "interval", minutes=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("calendar", collectors.fetch_calendar), "interval", minutes=60, max_instances=1, coalesce=True)
@@ -109,7 +110,7 @@ def pos_row(p: Position) -> dict:
     return {"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl, "tp": p.tp,
             "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price, "status": p.status,
             "opened_at": iso(p.opened_at), "closed_at": iso(p.closed_at), "profit": p.profit, "close_price": p.close_price,
-            "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl}
+            "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl, "watch": engine._watch.get((p.venue, p.ticket))}
 
 
 # ---------------------------------------------------------------- API
@@ -181,6 +182,27 @@ def api_candles(symbol: str, tf: int = 1, venue: str = "paper", n: int = 120):
     df = df.tail(n)
     return {"symbol": symbol.upper(), "tf": tf, "venue": venue,
             "candles": [[int(t.timestamp()), float(o), float(h), float(l), float(c)] for t, o, h, l, c in zip(df["time"], df["open"], df["high"], df["low"], df["close"])]}
+
+
+@app.get("/api/analysis")
+def api_analysis(symbol: str, venue: str = "paper"):
+    """Every indicator and factor behind the verdict for a symbol, live."""
+    cfg = get_settings()
+    if venue not in venues.VENUES or symbol.upper() not in cfg.symbol_list:
+        raise HTTPException(400, "unknown venue or symbol")
+    try:
+        return engine.analysis_for(symbol.upper(), venue)
+    except BrokerError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/api/watch")
+def api_watch(body: dict = Body(...)):
+    """Switch the reversal watch on or off."""
+    on = bool(body.get("on"))
+    kv_set("watch", on)
+    log("Reversal watch " + ("ON: open trades are re-scored every 30 s and protected or closed when the view flips" if on else "OFF"), "info")
+    return {"watch": on}
 
 
 @app.get("/api/stream")
@@ -395,45 +417,62 @@ def api_symbols(body: dict = Body(...)):
     return {"symbols": get_settings().symbol_list}
 
 
+_specs_cache: dict = {}
+
+
 @app.get("/api/specs")
 def api_specs(venue: str = "paper"):
-    """Contract specification and live spread of every traded symbol, as the chosen venue's broker reports them."""
+    """Contract specification and live spread of every traded symbol, as the chosen venue's broker reports them (read in parallel, kept 10 s)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     if venue not in venues.VENUES:
         raise HTTPException(400, "unknown venue")
+    hit = _specs_cache.get(venue)
+    if hit and time.time() - hit[0] < 10:
+        return hit[1]
     cfg = get_settings()
     broker = get_broker(venue)
-    rows, err = [], ""
+    err = ""
     try:
         broker.connect()
     except BrokerError as e:
         err = str(e)
-    for sym in cfg.symbol_list:
+
+    def one(sym: str) -> dict:
         row = {"symbol": sym, "ok": False}
-        if not err:
-            try:
-                info = broker.symbol_info(cfg.broker_symbol(sym))
-                tk = broker.tick(cfg.broker_symbol(sym))
-                sp = tk["ask"] - tk["bid"]
-                pt = info["point"] or 10.0 ** -info["digits"]
-                row.update({"ok": True, "broker_symbol": cfg.broker_symbol(sym), "digits": info["digits"], "point": pt, "contract": info["trade_contract_size"],
-                            "volume_min": info["volume_min"], "volume_step": info["volume_step"], "volume_max": info["volume_max"],
-                            "profit_ccy": info["currency_profit"], "base_ccy": info.get("currency_base", ""), "spread": sp,
-                            "spread_points": round(sp / pt, 1) if pt else None, "bid": tk["bid"], "ask": tk["ask"],
-                            "cost_per_lot": round(sp * info["trade_contract_size"], 2)})
-                if venue == "paper":
-                    from .paper import default_spec
-                    row["default"] = default_spec(sym)
-                    row["custom"] = sym in (kv_get("paper_specs") or {})
-            except BrokerError as e:
-                row["error"] = str(e)
-        rows.append(row)
-    return {"venue": venue, "editable": venue == "paper", "error": err, "rows": rows}
+        if err:
+            return row
+        try:
+            info = broker.symbol_info(cfg.broker_symbol(sym))
+            tk = broker.tick(cfg.broker_symbol(sym))
+            sp = tk["ask"] - tk["bid"]
+            pt = info["point"] or 10.0 ** -info["digits"]
+            row.update({"ok": True, "broker_symbol": cfg.broker_symbol(sym), "digits": info["digits"], "point": pt, "contract": info["trade_contract_size"],
+                        "volume_min": info["volume_min"], "volume_step": info["volume_step"], "volume_max": info["volume_max"],
+                        "profit_ccy": info["currency_profit"], "base_ccy": info.get("currency_base", ""), "spread": round(sp, info["digits"] + 1),
+                        "spread_points": round(sp / pt, 1) if pt else None, "bid": round(tk["bid"], info["digits"]), "ask": round(tk["ask"], info["digits"]),
+                        "cost_per_lot": round(sp * info["trade_contract_size"], 2)})
+            if venue == "paper":
+                from .paper import default_spec
+                row["default"] = default_spec(sym)
+                row["custom"] = sym in (kv_get("paper_specs") or {})
+        except BrokerError as e:
+            row["error"] = str(e)
+        return row
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        rows = list(ex.map(one, cfg.symbol_list))
+    out = {"venue": venue, "editable": venue == "paper", "error": err, "rows": rows}
+    _specs_cache[venue] = (time.time(), out)
+    return out
 
 
 @app.post("/api/paper/spec/{symbol}")
 def api_paper_spec(symbol: str, body: dict = Body(...)):
     """Change the paper account's contract size, digits, spread or lot limits for one symbol ({"reset": true} restores defaults)."""
     from .paper import reset_paper_spec, save_paper_spec
+
+    _specs_cache.clear()
 
     if symbol.upper() not in get_settings().symbol_list:
         raise HTTPException(400, "symbol is not in the traded list")
@@ -465,6 +504,20 @@ def api_paper_reset():
     kv_set("day_start:paper", None)
     log("Paper account reset", "warn")
     return {"ok": True}
+
+
+@app.post("/api/paper/balance")
+def api_paper_balance(body: dict = Body(...)):
+    """Set the paper account balance by hand."""
+    from .paper import get_paper
+
+    try:
+        amount = get_paper().set_balance(float(body.get("balance")))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    venues.set_loss_streak("paper", 0)
+    log(f"Paper balance set to ${amount:,.2f}", "warn")
+    return {"ok": True, "balance": amount}
 
 
 @app.post("/api/approve/{sid}")

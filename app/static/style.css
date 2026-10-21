@@ -206,3 +206,12 @@ svg text { font-family: var(--font-mono); }
 .chips2 .sc { border: 1px solid #33333a; background: transparent; color: var(--mute); border-radius: 99px; padding: 7px 14px; font: 600 13px var(--font-body); cursor: pointer; }
 .chips2 .sc.on { border-color: var(--accent); background: #2a1a0d; color: var(--accent-ink); }
 .chips2 .sc:disabled { opacity: .6; cursor: not-allowed; }
+.trail.rev { color: var(--sell); margin-left: 4px; }
+.fread { padding: 4px 0; border-top: 1px solid var(--line, #26262b); }
+.fread:first-child { border-top: 0; }
+
+/* sub-pages share the terminal's top bar: a plain page title row, no second header */
+.pagehead { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 20px; padding-bottom: 4px; }
+.pagehead h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.pagehead .lab { margin-top: 2px; }
+.pagehead .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

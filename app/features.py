@@ -33,10 +33,11 @@ def compute_technicals(df: pd.DataFrame, digits: int = 5, tf_min: int = 60) -> d
     htf_min = 240 if tf_min >= 30 else 60   # the higher timeframe that confirms the trend: H4 on H1/M30 charts, else H1
     htf_name = "H4" if htf_min == 240 else "H1"
     h4 = ind.resample_htf(df, htf_min, htf_min // tf_min)
-    h4_part = 0.0
+    h4_part, htf_txt = 0.0, None
     if len(h4) >= 55:
         h4e20, h4e50 = ind.ema(h4["close"], 20).iloc[-1], ind.ema(h4["close"], 50).iloc[-1]
         h4_part = 20.0 if h4e20 > h4e50 else -20.0
+        htf_txt = f"{htf_name} " + ("up" if h4_part > 0 else "down")
         parts.append(f"{htf_name} trend " + ("up" if h4_part > 0 else "down"))
     structure = 0.0
     if len(highs) >= 2 and len(lows) >= 2:
@@ -90,6 +91,7 @@ def compute_technicals(df: pd.DataFrame, digits: int = 5, tf_min: int = 60) -> d
 
     return {
         "close": c, "atr": a, "ema20": e20, "ema50": e50, "ema200": e200, "rsi": r,
+        "macd_hist": h_now, "macd_hist_prev": h_prev, "htf": htf_txt, "pattern_name": pat[0] if pat else None,
         "swing_highs": [p for _, p in highs[-4:]], "swing_lows": [p for _, p in lows[-4:]],
         "trend": {"score": trend, "reading": "; ".join(parts)},
         "pattern": {"score": pattern, "reading": "; ".join(pparts) or "no pattern or level event on the last candles"},

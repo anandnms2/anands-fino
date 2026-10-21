@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
     stop_floor_spreads: float = 0.0    # 0 = derived from SPREAD_STOP_LIMIT (stop at least 1.05 / that many spreads); renamed from MIN_STOP_SPREADS, whose old value Coolify froze at 12
     max_tp_atr: float = 3.0            # the target is never further than this many ATRs when the risk:reward allows (a 7 ATR target is never reached)
+    watch_on: bool = True              # reversal watch: re-score every open trade on all factors and act when the view flips (the dashboard switch overrides)
+    watch_every_s: int = 30
+    watch_exit_score: float = 30.0     # the verdict against the trade this strong, confirmed WATCH_CONFIRM checks in a row with 3+ factors against, closes it
+    watch_confirm: int = 2
     trail_on: bool = True              # trailing stop: lock profit as a trade moves in our favour (the dashboard switch overrides)
     trail_start_r: float = 1.0         # at this many R of profit (R = the first stop distance) the stop moves to break-even plus TRAIL_LOCK_R
     trail_lock_r: float = 0.2

@@ -173,13 +173,26 @@ class PaperBroker:
     def _state(self) -> dict:
         st = kv_get("paper_state")
         if not st:
-            st = {"balance": float(get_settings().paper_balance), "next": 800000, "positions": {}, "deals": {}}
+            st = {"balance": start_balance(), "next": 800000, "positions": {}, "deals": {}}
             kv_set("paper_state", st)
         return st
 
     def reset(self) -> None:
         with self._lock:
-            kv_set("paper_state", {"balance": float(get_settings().paper_balance), "next": 800000, "positions": {}, "deals": {}})
+            kv_set("paper_state", {"balance": start_balance(), "next": 800000, "positions": {}, "deals": {}})
+
+    def set_balance(self, amount: float) -> float:
+        """Set the paper account balance by hand (also the starting balance for later resets). Open trades stay open."""
+        if not (amount == amount) or amount < 100 or amount > 100_000_000:
+            raise ValueError("balance must be between 100 and 100,000,000")
+        amount = round(float(amount), 2)
+        with self._lock:
+            st = self._state()
+            st["balance"] = amount
+            kv_set("paper_state", st)
+            kv_set("paper_start_balance", amount)
+        kv_set("day_start:paper", None)
+        return amount
 
     # ---- interface ----
     def connect(self):
@@ -354,6 +367,11 @@ class PaperBroker:
 
 
 _paper = None
+
+
+def start_balance() -> float:
+    v = kv_get("paper_start_balance")
+    return float(v) if v else float(get_settings().paper_balance)
 
 
 def get_paper() -> PaperBroker:

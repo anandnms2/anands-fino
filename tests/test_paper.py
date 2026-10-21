@@ -313,3 +313,19 @@ def test_stream_payload_has_prices_and_live_positions():
     chunk = asyncio.run(api_stream().body_iterator.__anext__())
     d = _json.loads(chunk.split("data: ", 1)[1])
     assert "XAUUSD" in d["px"]["demo"] and d["pos"] and d["pos"][0]["ticket"] == tk and "floating" in d["pos"][0]
+
+
+def test_paper_balance_is_editable_and_survives_reset():
+    from app.paper import get_paper
+    from app import main
+
+    assert get_paper().account()["balance"] == 10000.0
+    assert main.api_paper_balance({"balance": 25000})["balance"] == 25000.0
+    assert get_paper().account()["balance"] == 25000.0
+    get_paper().reset()
+    assert get_paper().account()["balance"] == 25000.0
+    import pytest
+    from fastapi import HTTPException
+    for bad in (5, "x", None, float("nan")):
+        with pytest.raises(HTTPException):
+            main.api_paper_balance({"balance": bad})
