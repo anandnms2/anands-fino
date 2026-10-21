@@ -8,7 +8,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
@@ -246,7 +246,7 @@ def api_diagnostics():
     """Read-only check of the MT5 bridge, symbol names and data feeds. Run this first after deploying."""
     cfg = get_settings()
     broker = get_broker()
-    out = {"mock": cfg.mt5_mock, "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port}, "symbols": {}}
+    out = {"mock": cfg.mt5_mock, "broker": cfg.broker, "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port} if cfg.broker == "mt5" else {"env": cfg.ctrader_env}, "symbols": {}}
     try:
         broker.connect()
         a = broker.account()
@@ -270,6 +270,39 @@ def api_diagnostics():
     out["keys"] = {"anthropic": bool(cfg.anthropic_api_key), "freellmapi": bool(cfg.freellmapi_base_url), "fred": bool(cfg.fred_api_key)}
     out["feeds_age_min"] = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return out
+
+
+# ---------------------------------------------------------------- cTrader authorisation (one-time, in the browser)
+def _redirect_uri(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", "")).split(",")[0].strip()
+    return f"{proto}://{host}/ctrader/callback"
+
+
+@app.get("/ctrader/connect")
+def ctrader_connect(request: Request):
+    from . import ctrader
+
+    if not get_settings().ctrader_client_id:
+        raise HTTPException(400, "CTRADER_CLIENT_ID is not set")
+    return RedirectResponse(ctrader.auth_url(_redirect_uri(request)))
+
+
+@app.get("/ctrader/callback")
+def ctrader_callback(request: Request, code: str = "", error: str = ""):
+    from . import ctrader
+
+    if error or not code:
+        raise HTTPException(400, f"cTrader did not grant access: {error or 'no code returned'}")
+    try:
+        ctrader.exchange_code(code, _redirect_uri(request))
+    except BrokerError as e:
+        raise HTTPException(400, str(e))
+    broker = get_broker()
+    if hasattr(broker, "_drop"):
+        broker._drop()  # reconnect with the new token on the next call
+    log("cTrader access granted", "info")
+    return RedirectResponse("/")
 
 
 # ---------------------------------------------------------------- UI

@@ -1,9 +1,6 @@
-# Anands Fino: app + MetaTrader 5 (Wine) + Postgres in one Coolify stack.
+# Anands Fino: app + Postgres. The broker link is the cTrader Open API (no MetaTrader, no Wine).
 # Coolify: Application > Build Pack "Docker Compose" > location /docker-compose.yaml.
-# Then assign domains: app -> port 8000, mt5 -> port 3000 (the MT5 web desktop).
-#
-# SECURITY: MT5's RPyC bridge (8001) has no login and controls the terminal.
-# It is `expose`d to this stack's private network only. Never publish it with `ports:`.
+# Domain: app -> port 8000. Put the same https address in your cTrader app's redirect URI (see README).
 services:
   app:
     build: .
@@ -11,20 +8,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      mt5:
-        condition: service_started
     environment:
       - SERVICE_FQDN_APP_8000
       - DATABASE_URL=postgresql://fino:${SERVICE_PASSWORD_POSTGRES}@db:5432/fino
-      - MT5_HOST=mt5
-      - MT5_PORT=8001
+      - BROKER=${BROKER:-ctrader}
+      - CTRADER_CLIENT_ID=${CTRADER_CLIENT_ID:-}
+      - CTRADER_CLIENT_SECRET=${CTRADER_CLIENT_SECRET:-}
+      - CTRADER_ENV=${CTRADER_ENV:-demo}
+      - CTRADER_ACCOUNT_ID=${CTRADER_ACCOUNT_ID:-}
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASSWORD=${SERVICE_PASSWORD_ADMIN}
       - MODE=${MODE:-demo_auto}
       - ALLOW_LIVE=${ALLOW_LIVE:-false}
       - SYMBOLS=${SYMBOLS:-XAUUSD,XAGUSD,EURUSD,GBPUSD}
       - SYMBOL_MAP=${SYMBOL_MAP:-}
-      - BROKER_UTC_OFFSET_HOURS=${BROKER_UTC_OFFSET_HOURS:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5-5}
       - CLAUDE_MAX_CALLS_PER_DAY=${CLAUDE_MAX_CALLS_PER_DAY:-40}
@@ -38,23 +35,6 @@ services:
       - RUN_CYCLE_ON_START=${RUN_CYCLE_ON_START:-false}
     expose:
       - "8000"
-
-  mt5:
-    build: ./mt5   # gmag11/metatrader5_vnc plus a fix that pins the bridge library (see mt5/10-fix-bridge.sh)
-    restart: unless-stopped
-    environment:
-      - SERVICE_FQDN_MT5_3000
-      - CUSTOM_USER=anand
-      - PASSWORD=${SERVICE_PASSWORD_MT5}
-      - TZ=${TZ:-Africa/Dar_es_Salaam}
-    shm_size: "1gb"            # browser-based desktops blank out or crash with Docker's default 64 MB
-    security_opt:
-      - seccomp:unconfined     # Wine and the desktop need syscalls Docker's default profile blocks
-    volumes:
-      - mt5_config:/config   # keeps the broker login, charts and settings across redeploys
-    expose:
-      - "3000"
-      - "8001"
 
   db:
     image: postgres:16-alpine
@@ -72,5 +52,4 @@ services:
       retries: 10
 
 volumes:
-  mt5_config:
   pg_data:

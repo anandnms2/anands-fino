@@ -1,0 +1,78 @@
+# OPTIONAL alternative stack: app + MetaTrader 5 (Wine) + Postgres. The default is docker-compose.yaml (cTrader, no Wine).
+# Use it by setting the Coolify compose location to /docker-compose.mt5.yaml. The current MT5 build crashes under Wine on some
+# hosts (false "debugger found" error), which is why cTrader is the default.
+# Then assign domains: app -> port 8000, mt5 -> port 3000 (the MT5 web desktop).
+#
+# SECURITY: MT5's RPyC bridge (8001) has no login and controls the terminal.
+# It is `expose`d to this stack's private network only. Never publish it with `ports:`.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mt5:
+        condition: service_started
+    environment:
+      - SERVICE_FQDN_APP_8000
+      - DATABASE_URL=postgresql://fino:${SERVICE_PASSWORD_POSTGRES}@db:5432/fino
+      - BROKER=mt5
+      - MT5_HOST=mt5
+      - MT5_PORT=8001
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${SERVICE_PASSWORD_ADMIN}
+      - MODE=${MODE:-demo_auto}
+      - ALLOW_LIVE=${ALLOW_LIVE:-false}
+      - SYMBOLS=${SYMBOLS:-XAUUSD,XAGUSD,EURUSD,GBPUSD}
+      - SYMBOL_MAP=${SYMBOL_MAP:-}
+      - BROKER_UTC_OFFSET_HOURS=${BROKER_UTC_OFFSET_HOURS:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5-5}
+      - CLAUDE_MAX_CALLS_PER_DAY=${CLAUDE_MAX_CALLS_PER_DAY:-40}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-}
+      - FREELLMAPI_KEY=${FREELLMAPI_KEY:-}
+      - FREELLMAPI_MODEL=${FREELLMAPI_MODEL:-auto}
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - RISK_PER_TRADE_PCT=${RISK_PER_TRADE_PCT:-0.5}
+      - DAILY_LOSS_CAP_PCT=${DAILY_LOSS_CAP_PCT:-2.0}
+      - NOTIFY_WEBHOOK_URL=${NOTIFY_WEBHOOK_URL:-}
+      - RUN_CYCLE_ON_START=${RUN_CYCLE_ON_START:-false}
+    expose:
+      - "8000"
+
+  mt5:
+    build: ./mt5   # gmag11/metatrader5_vnc plus a fix that pins the bridge library (see mt5/10-fix-bridge.sh)
+    restart: unless-stopped
+    environment:
+      - SERVICE_FQDN_MT5_3000
+      - CUSTOM_USER=anand
+      - PASSWORD=${SERVICE_PASSWORD_MT5}
+      - TZ=${TZ:-Africa/Dar_es_Salaam}
+    shm_size: "1gb"            # browser-based desktops blank out or crash with Docker's default 64 MB
+    security_opt:
+      - seccomp:unconfined     # Wine and the desktop need syscalls Docker's default profile blocks
+    volumes:
+      - mt5_config:/config   # keeps the broker login, charts and settings across redeploys
+    expose:
+      - "3000"
+      - "8001"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=fino
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=fino
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fino -d fino"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mt5_config:
+  pg_data:

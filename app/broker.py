@@ -281,7 +281,14 @@ def get_broker():
     global _broker
     if _broker is None:
         s = get_settings()
-        _broker = MockBroker() if s.mt5_mock else RemoteBroker(s.mt5_host, s.mt5_port)
+        if s.mt5_mock:
+            _broker = MockBroker()
+        elif s.broker == "mt5":
+            _broker = RemoteBroker(s.mt5_host, s.mt5_port)
+        else:
+            from .ctrader import CTraderBroker
+
+            _broker = CTraderBroker()
     return _broker
 
 

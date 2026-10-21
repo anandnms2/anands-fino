@@ -33,7 +33,17 @@ class Settings(BaseSettings):
     # storage
     database_url: str = "sqlite:///./fino.db"
 
-    # broker bridge (MT5 under Wine, reached over RPyC on the stack's private network)
+    # which broker connection to use: "ctrader" (cTrader Open API) or "mt5" (MT5 under Wine, see docker-compose.mt5.yaml)
+    broker: str = "ctrader"
+    ctrader_client_id: str = ""
+    ctrader_client_secret: str = ""
+    ctrader_env: str = "demo"          # demo or live; must match the account used
+    ctrader_account_id: str = ""       # optional: trader login or ctid when the cTrader ID has several accounts
+    ctrader_access_token: str = ""     # optional: normally obtained through /ctrader/connect and kept in the database
+    ctrader_refresh_token: str = ""
+    ctrader_url: str = ""              # override of the WebSocket endpoint (tests)
+
+    # MT5 bridge (MT5 under Wine, reached over RPyC on the stack's private network)
     mt5_host: str = "mt5"
     mt5_port: int = 8001
     mt5_mock: bool = False

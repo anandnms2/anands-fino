@@ -55,7 +55,7 @@ async function desk() {
   let html = `<header class="top">
     <div class="brand"><img src="/static/logo.png" alt=""><div><h1>Anands Fino</h1><div class="lab">Forex &amp; metals desk</div></div></div>
     <div class="tools">
-      <span class="pill ${st.bridge.ok ? "buy" : "red"}">MT5 ${st.bridge.ok ? "connected" : "offline"}</span>
+      <span class="pill ${st.bridge.ok ? "buy" : "red"}">${st.broker === "mt5" ? "MT5" : "cTrader"} ${st.bridge.ok ? "connected" : "offline"}</span>
       ${a ? `<span class="pill ${a.demo ? "acc" : "warn"}">${a.demo ? "DEMO" : "REAL"} ${esc(a.login)}</span>` : ""}
       ${st.mock ? '<span class="pill warn">MOCK broker</span>' : ""}
       <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
@@ -65,7 +65,13 @@ async function desk() {
 
   if (h.on) html += `<div class="banner" role="alert"><strong>Trading halted.</strong><span>${esc(h.reason)}</span>
     <button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
-  if (!st.bridge.ok) html += `<div class="banner warn"><strong>Broker bridge not reachable.</strong><span class="mute">${esc(st.bridge.error)}. Log in to a DEMO account in the MT5 web desktop, then check <a href="/api/diagnostics">diagnostics</a>.</span></div>`;
+  if (!st.bridge.ok) {
+    const ct = st.broker !== "mt5";
+    const needAuth = ct && /authoris|ctrader\/connect/i.test(st.bridge.error || "");
+    html += `<div class="banner warn"><strong>Broker not connected.</strong><span class="mute">${esc(st.bridge.error)}</span>
+      ${needAuth ? '<a class="btn pri sm" style="margin-left:auto" href="/ctrader/connect">Connect cTrader</a>' : ""}
+      <a class="btn sm" ${needAuth ? "" : 'style="margin-left:auto"'} href="/api/diagnostics">Diagnostics</a></div>`;
+  }
   if (!st.feeds.claude_key) html += `<div class="banner warn"><strong>ANTHROPIC_API_KEY is not set.</strong><span class="mute">Claude cannot say YES, so no trade will pass.</span></div>`;
 
   html += `<section class="card strip">

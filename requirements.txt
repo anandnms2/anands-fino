@@ -10,3 +10,4 @@ anthropic>=0.40
 feedparser>=6.0
 pydantic-settings>=2.4
 rpyc>=6.0
+websocket-client>=1.7

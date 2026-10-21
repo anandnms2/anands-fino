@@ -478,7 +478,7 @@ def state() -> dict:
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
         "now": iso(now), "mode": get_mode(), "modes": MODES, "allow_live": cfg.allow_live, "halted": halted(),
-        "mock": cfg.mt5_mock, "bridge": {"ok": bridge, "error": acct_err},
+        "mock": cfg.mt5_mock, "broker": cfg.broker, "bridge": {"ok": bridge, "error": acct_err},
         "account": None if not acct else {
             "login": acct["login"], "server": acct["server"], "demo": account_is_demo(acct), "currency": acct["currency"],
             "balance": acct["balance"], "equity": acct["equity"], "day_start_equity": start_eq,
