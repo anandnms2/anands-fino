@@ -49,142 +49,315 @@ function scoreBar(score) {
   return `<div class="track" aria-hidden="true"><b></b><i style="left:${left}%;width:${w}%;background:${col}"></i></div>`;
 }
 
-/* ------------------------------------------------------------ desk */
-async function desk() {
-  const [st, latest, pos, appr, act_] = await Promise.all([
-    api("/api/state"), api("/api/signals/latest"), api("/api/positions"), api("/api/approvals"), api("/api/activity?limit=25")]);
-  const r = st.risk, u = st.usage, V = st.venues;
-  const h = st.halted || {};
-  let html = `<header class="top">
-    <div class="brand"><img src="/static/logo.png" alt=""><div><h1>Anands Fino</h1><div class="lab">Forex &amp; metals desk</div></div></div>
-    <div class="tools">
-      ${st.mock ? '<span class="pill warn">MOCK broker</span>' : ""}
-      ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${esc(v.tf_label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
-      <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
-      <a class="btn" href="#/reports">Reports</a>
-      <a class="btn" href="#/specs">Contracts</a>
-      <button class="btn pri" onclick="act('/api/cycle?force=true',{},'Cycle started')">Run cycle now</button>
-      <button class="btn" onclick="act('/api/refresh',{},'Refreshing feeds')">Refresh feeds</button>
-    </div></header>`;
 
-  if (h.on) html += `<div class="banner" role="alert"><strong>Trading halted.</strong><span>${esc(h.reason)}</span>
-    <button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
-  for (const v of Object.values(V)) {
-    if (v.halt && v.halt.on) html += `<div class="banner" role="alert"><strong>${esc(v.label)} venue paused.</strong><span>${esc(v.halt.reason)}</span>
-      <button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
-    if (v.connected === false) {
-      const needAuth = st.broker !== "mt5" && v.name !== "paper" && /authoris|ctrader\/connect/i.test(v.error || "");
-      html += `<div class="banner warn"><strong>${esc(v.label)} not connected.</strong><span class="mute">${esc(v.error)}</span>
-        ${needAuth ? '<a class="btn pri sm" style="margin-left:auto" href="/ctrader/connect">Connect cTrader</a>' : ""}
-        <a class="btn sm" ${needAuth ? "" : 'style="margin-left:auto"'} href="/api/diagnostics?venue=${v.name}">Diagnostics</a></div>`;
+/* ------------------------------------------------------------ live state (terminal) */
+const $bar = document.getElementById("bar");
+const S = { venue: localStorage.getItem("fv") || "paper", sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
+  st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
+const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
+const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
+const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/settings" ? "settings" : "terminal"; };
+const $ = (id) => document.getElementById(id);
+
+function startStream() {
+  if (S.es || !window.EventSource) return;
+  const es = new EventSource("/api/stream");
+  S.es = es;
+  es.onmessage = (e) => {
+    let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+    S.lat = Math.max(0, Date.now() - d.ts);
+    for (const v in d.px) for (const sy in d.px[v]) {
+      const o = (S.last[v] || {})[sy], n = d.px[v][sy][0];
+      if (o != null && n !== o) { (S.dir[v] = S.dir[v] || {})[sy] = n > o ? 1 : -1; }
+      (S.last[v] = S.last[v] || {})[sy] = n;
     }
-  }
-  if (!st.feeds.claude_key) html += `<div class="banner warn"><strong>ANTHROPIC_API_KEY is not set.</strong><span class="mute">Claude cannot say YES, so no trade will pass.</span></div>`;
-
-  html += `<section class="card strip">${Object.values(V).map((v) => {
-    const a = v.account;
-    return `<div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><strong>${esc(v.label)}</strong>
-        ${a ? `<span class="pill ${a.demo ? "acc" : "warn"}">${a.demo ? "DEMO" : "REAL"} ${esc(a.login)}</span>` : v.locked ? '<span class="pill none">locked</span>' : ""}</div>
-      <div class="mute" style="font-size:12px;margin:2px 0 8px">${esc(VDESC[v.name])}</div>
-      <div class="v">${a ? money(a.equity) : "–"}</div>
-      <div class="s">${a ? `today <span class="${a.day_pnl < 0 ? "bad" : "ok"}">${money(a.day_pnl)}</span> (${signed(a.day_pnl_pct, 2)}%) · ` : ""}${v.open_count}/${r.max_open} open${v.floating ? " · floating " + money(v.floating) : ""}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;align-items:center">
-        <span class="lab">Trade ${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : sw(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}` ).replace("onclick=\"", v.name === "live" && !v.on ? "onclick=\"if(!confirm('Switch LIVE trading on? Real money on a real account.'))return;" : "onclick=\"")}</span>
-        <span class="lab">Auto-approve ${v.locked ? "" : sw(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`).replace("onclick=\"", v.name === "live" && !v.auto ? "onclick=\"if(!confirm('Auto-approve LIVE trades? Orders will go out without your click.'))return;" : "onclick=\"")}</span>
-        <span class="lab">Candles <select aria-label="${esc(v.label)} chart timeframe" onchange="act('/api/venue/${v.name}',{tf:Number(this.value)},'${esc(v.label)} timeframe set')" style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:12px var(--font-mono)">${st.timeframes.map((m) => `<option value="${m}" ${m === v.tf ? "selected" : ""}>${m === 60 ? "1 hour" : m + " min"}</option>`).join("")}</select></span>
-        ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset</button>` : ""}
-      </div></div>`;
-  }).join("")}</section>`;
-
-  if (appr.length) {
-    html += `<section class="card"><div class="hd"><h2>Waiting for your approval</h2><span class="mute">Claude said YES, the gate passed</span></div>`;
-    for (const s of appr) {
-      const l = s.levels || {};
-      html += `<div class="appr"><div class="what">${vPill(s.venue)} <strong>${esc(s.symbol)}</strong> ${biasPill(s.bias)}
-        <span class="mono mute"> ${num(s.lots, 2)} lots · entry ${esc(l.entry)} · SL ${esc(l.sl)} · TP ${esc(l.tp)}</span>
-        <div class="mute">${esc((s.claude || {}).thesis)}</div>
-        <div class="mute mono">expires ${hm(s.expires_at)} · <a href="#/signal/${s.id}">details</a></div></div>
-        <div><button class="btn pri sm" onclick="act('/api/approve/${s.id}',{},'Approved')">Approve</button>
-        <button class="btn sm" onclick="act('/api/reject/${s.id}',{},'Rejected')">Reject</button></div></div>`;
-    }
-    html += `</section>`;
-  }
-
-  const rows = latest.map((s) => `<tr>
-    <td><a href="#/signal/${s.id}"><strong>${esc(s.symbol)}</strong></a></td>
-    <td>${biasPill(s.bias)}</td>
-    <td style="min-width:150px">${scoreBar(s.score)}<div class="mono mute" style="font-size:12px">${signed(s.score, 1)} · ${s.agree}/${s.available} agree</div></td>
-    <td class="mono">${s.decision ? esc(s.decision) + (s.confidence != null ? " " + num(s.confidence, 2) : "") : "–"}</td>
-    <td>${(s.venues || []).length ? s.venues.map((x) => `<a href="#/signal/${x.id}">${vPill(x.venue)} ${stPill(x.status)}</a>`).join(" ") : stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc((s.venues || []).length ? "" : s.reason)}</div></td>
-    <td class="mono mute">${hm(s.ts)}</td></tr>`).join("");
-  html += `<div class="grid"><div class="col-main">
-    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
-      <div class="tw"><table><thead><tr><th>Symbol</th><th>Bias</th><th>Score</th><th>Claude</th><th>Outcome</th><th>At</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="6" class="mute">No cycle has run yet. Press “Run cycle now”.</td></tr>'}</tbody></table></div></section>`;
-
-  const prow = pos.open.map((p) => `<tr><td>${vPill(p.venue)} <strong>${esc(p.symbol)}</strong> <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
-    <td class="mono">${num(p.lots, 2)}</td><td class="mono">${esc(p.entry)}</td><td class="mono">${esc(p.sl)} / ${esc(p.tp)}</td>
-    <td class="mono ${p.floating < 0 ? "bad" : "ok"}">${money(p.floating)}</td><td class="mono">${money(p.risk_usd)}</td>
-    <td class="r"><button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></td></tr>`).join("");
-  html += `<section class="card"><div class="hd"><h2>Open positions</h2></div><div class="tw"><table><thead><tr><th>Position</th><th>Lots</th><th>Entry</th><th>SL / TP</th><th>Floating</th><th>Risk</th><th></th></tr></thead>
-    <tbody>${prow || '<tr><td colspan="7" class="mute">Nothing open.</td></tr>'}</tbody></table></div></section>`;
-
-  const crow = pos.closed.map((p) => `<tr><td>${vPill(p.venue)} ${esc(p.symbol)} <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td>
-    <td class="mono">${esc(p.entry)} → ${esc(p.close_price)}</td><td class="mono ${p.profit < 0 ? "bad" : "ok"}">${money(p.profit)}</td><td class="mono mute">${hm(p.closed_at)}</td></tr>`).join("");
-  if (crow) html += `<section class="card"><div class="hd"><h2>Recently closed</h2></div><div class="tw"><table style="min-width:420px"><tbody>${crow}</tbody></table></div></section>`;
-
-  html += `<section class="card"><div class="hd"><h2>Activity</h2></div>${act_.map((x) => `<div class="feed"><span class="t">${hm(x.ts)}</span>
-    <span class="${x.level === "error" ? "bad" : x.level === "warn" ? "warn" : ""}">${x.symbol ? "<strong>" + esc(x.symbol) + "</strong> " : ""}${esc(x.text)}${x.signal_id ? ` <a href="#/signal/${x.signal_id}">view</a>` : ""}</span></div>`).join("") || '<div class="pad mute">No activity yet.</div>'}</section>
-    </div><div class="col-side">`;
-
-  html += `<section class="card"><div class="hd"><h2>Symbols</h2><span class="mono mute">${st.symbols.length} traded${st.symbols_custom ? " · set here" : " · from environment"}</span></div><div class="pad">
-    <div class="mono" style="font-size:12px;margin-bottom:8px;word-break:break-word">${st.symbols.map(esc).join(" · ")}</div>
-    <textarea id="symIn" rows="3" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px var(--font-mono)">${esc(st.symbols_default.join(","))}</textarea>
-    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn sm pri" onclick="act('/api/symbols',{symbols:document.getElementById('symIn').value},'Symbols saved')">Save list</button>
-    ${st.symbols_custom ? `<button class="btn sm" onclick="act('/api/symbols',{reset:true},'Back to the environment list')">Use environment list</button>` : ""}</div>
-    <div class="mute" style="font-size:12px;margin-top:6px">Takes effect on the next cycle. The textarea starts from the built-in list.</div></div></section>`;
-
-  html += `<section class="card"><div class="hd"><h2>Trading profile</h2><span class="mono mute">${st.profile === "fast" ? "fast" : "normal"}</span></div><div class="pad">
-    <div class="mute" style="margin-bottom:10px">Fast: score ±20, 50% of factors agree, Claude re-asked after 5 min, up to 5 open trades. Normal: score ±35, 60%, 15 min, 3 open. Loss limits, news blackout, spread checks and Claude's YES/NO apply in both.</div>
-    <button class="btn sm" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn sm" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button>
-    <div class="mute" style="margin:12px 0 8px">Trailing stop: <strong>${st.trail ? "ON" : "OFF"}</strong> (at +1R stop to break-even +0.2R, from +1.5R it follows 0.75R behind and the target moves ahead)</div>
-    <button class="btn sm" onclick="act('/api/trail',{on:${!st.trail}},'Trailing stop ${st.trail ? "off" : "on"}')">Turn trailing ${st.trail ? "off" : "on"}</button>
-    <div class="mute" style="margin:12px 0 8px">Claude's veto: <strong>${st.claude_veto ? "ON (Claude can say no)" : "OFF (Claude is not asked)"}</strong></div>
-    <button class="btn sm" onclick="act('/api/claude-veto',{on:${!st.claude_veto}},'Claude veto ${st.claude_veto ? "off" : "on"}')">Turn veto ${st.claude_veto ? "off" : "on"}</button></div></section>`;
-
-  html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
-    <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>
-    ${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}
-    ${st.allow_live ? `<button class="btn sm" style="margin-left:8px" onclick="act('/api/allow-live',{on:false},'Live locked')">Lock Live</button>` : ""}</div></section>`;
-
-  const meter = (label, val, cap, txt, hot) => `<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${label}</span><span class="mono mute">${txt}</span></div>
-    <div class="meter ${hot ? "hot" : ""}"><i style="width:${Math.min(100, cap ? (val / cap) * 100 : 0)}%"></i></div></div>`;
-  html += `<section class="card"><div class="hd"><h2>Risk limits</h2><span class="mono mute">per venue</span></div>
-    ${Object.values(V).filter((v) => v.on || v.open_count).map((v) => {
-      const dl = v.account ? Math.max(0, -v.account.day_pnl_pct) : 0, orp = v.open_risk_pct || 0;
-      return `<div class="row" style="border-top:1px solid var(--line)"><strong>${esc(v.label)}</strong></div>
-        ${meter("Daily loss", dl, r.daily_loss_cap_pct, `${num(dl, 2)}% / ${r.daily_loss_cap_pct}%`, dl > r.daily_loss_cap_pct * 0.7)}
-        ${meter("Open risk", orp, r.open_risk_cap_pct, `${num(orp, 2)}% / ${num(r.open_risk_cap_pct, 1)}%`, orp > r.open_risk_cap_pct * 0.7)}
-        ${meter("Loss streak", v.loss_streak, r.max_loss_streak, `${v.loss_streak} / ${r.max_loss_streak}`, v.loss_streak >= r.max_loss_streak - 1)}`;
-    }).join("") || '<div class="pad mute">No venue is on.</div>'}
-    <div class="row"><span>Risk per trade</span><span class="mono">${r.risk_per_trade_pct}%</span></div></section>`;
-
-  html += `<section class="card"><div class="hd"><h2>Events (36h)</h2></div>${st.events.map((e) => `<div class="row"><span><span class="pill ${e.impact === "High" ? "warn" : "none"}">${esc(e.currency)}</span> ${esc(e.title)}</span>
-    <span class="mono mute">${e.minutes >= 0 ? "in " + Math.floor(e.minutes / 60) + "h " + (e.minutes % 60) + "m" : "now"}</span></div>`).join("") || '<div class="pad mute">No high or medium events soon, or the calendar has not loaded.</div>'}</section>`;
-
-  const sys = (n, ok, extra) => `<div class="row"><span><span class="dot ${ok ? "g" : "r"}"></span>${n}</span><span class="mono mute">${extra}</span></div>`;
-  const ag = st.feeds.ages_min;
-  html += `<section class="card"><div class="hd"><h2>Systems</h2></div>
-    ${sys("Claude (final say)", st.feeds.claude_key, `${u.claude}/${u.claude_cap} today`)}
-    ${sys("FreeLLMAPI (tagging)", st.feeds.freellm_url, `${u.freellm}/${u.freellm_cap} today`)}
-    ${sys("FRED macro", st.feeds.fred_key, ago(ag.macro))}
-    ${sys("CFTC positioning", ag.cot != null, ago(ag.cot))}
-    ${sys("Calendar", ag.calendar != null, ago(ag.calendar))}
-    ${sys("News", ag.news_run != null, ago(ag.news_run))}
-    <div class="pad" style="padding-top:12px"><a href="/api/diagnostics">Open diagnostics</a></div></section>
-    </div></div>`;
-  $app.innerHTML = html;
+    S.px = d.px; S.live = {};
+    for (const p of d.pos) S.live[p.venue + ":" + p.ticket] = p;
+    onTick();
+  };
+  es.onerror = () => { S.lat = -1; setLat(); };
 }
+
+function onTick() {
+  barLive();
+  if (pageName() !== "terminal" || !S.mounted || !S.st) return;
+  updateWatch(); updateHead(); updateLiveCandle(); updateLivePos(); queueDraw();
+}
+
+/* ------------------------------------------------------------ top bar */
+function setLat() {
+  const el = $("bar-lat"), dot = $("bar-dot");
+  if (!el) return;
+  el.textContent = S.lat < 0 ? "stream reconnecting" : "stream " + S.lat + " ms";
+  dot.style.background = S.lat < 0 ? "var(--sell)" : S.lat > 1500 ? "var(--warn)" : "var(--buy)";
+}
+function liveFloat() {
+  let any = false, f = 0;
+  for (const k in S.live) if (k.startsWith(S.venue + ":")) { any = true; f += S.live[k].floating; }
+  return any ? f : null;
+}
+function barLive() {
+  setLat();
+  const st = S.st; if (!st) return;
+  const v = st.venues[S.venue] || {}, a = v.account, lf = liveFloat(), fl = lf != null ? lf : (v.floating || 0);
+  const fe = $("bar-fl"), ee = $("bar-eq");
+  if (fe) { fe.textContent = (fl < 0 ? "-$" : "+$") + num(Math.abs(fl), 2); fe.className = "mono b " + (fl < 0 ? "bad" : "ok"); }
+  if (ee && a) ee.textContent = "$" + num(lf != null ? a.balance + lf : a.equity, 2);
+}
+function renderBar() {
+  const st = S.st; if (!st) return;
+  const V = st.venues, v = V[S.venue] || {}, a = v.account, r = st.risk, pg = pageName();
+  const nav = [["terminal", "#/", "Terminal"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
+  $bar.innerHTML = `<div class="bar-in"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
+    <nav class="bnav" aria-label="Pages">${nav.map(([k, h, l]) => `<a href="${h}" class="${pg === k || (pg === "signal" && k === "terminal") ? "on" : ""}">${l}</a>`).join("")}</nav>
+    <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')">${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div>
+    <div class="metrics">
+      <div><span>BALANCE</span><b class="mono">${a ? "$" + num(a.balance, 2) : "–"}</b></div>
+      <div><span>EQUITY</span><b class="mono" id="bar-eq">${a ? "$" + num(a.equity, 2) : "–"}</b></div>
+      <div><span>FLOATING P/L</span><b class="mono b" id="bar-fl">–</b></div>
+      <div><span>OPEN RISK</span><b class="mono">${num(v.open_risk_pct || 0, 2)}% <i>/ ${num(r.open_risk_cap_pct, 1)}%</i></b></div>
+      <div><span>DAY P/L</span><b class="mono ${a && a.day_pnl < 0 ? "bad" : ""}">${a ? signed(a.day_pnl_pct, 2) + "%" : "–"} <i>/ -${r.daily_loss_cap_pct}%</i></b></div>
+    </div>
+    <div class="chips"><span class="chip"><span id="bar-dot" class="dot"></span><span class="mono" id="bar-lat">stream …</span></span>
+      <span class="chip">Profile <b class="acc">${st.profile === "fast" ? "FAST" : "NORMAL"}</b></span>
+      <span class="chip">Trailing <b class="${st.trail ? "ok" : "mute"}">${st.trail ? "ON" : "OFF"}</b></span>
+      <span class="chip">Claude veto <b class="${st.claude_veto ? "ok" : "mute"}">${st.claude_veto ? "ON" : "OFF"}</b></span>
+      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div>`;
+  barLive();
+}
+window.pickVenue = (v) => {
+  S.venue = v; localStorage.setItem("fv", v); S.tf = 0; S.candleKey = "";
+  renderBar();
+  if (pageName() === "terminal") { renderWatch(); renderHead(); renderBottom(); loadCandles(); renderSide(); }
+};
+
+/* ------------------------------------------------------------ terminal */
+function mountTerminal() {
+  $app.className = "full";
+  $app.innerHTML = `<div id="banners"></div><div class="term">
+    <aside class="card wl"><div class="wl-h"><span class="lab">Watchlist</span><span class="mute" style="font-size:11px" id="wlc"></span></div>
+      <div class="wl-r head"><span>SYMBOL</span><span>BID</span><span>ASK</span><span>SC</span></div><div id="wl"></div></aside>
+    <section class="card chartc"><div class="chead" id="chead"></div><div class="cv" id="cvw"><canvas id="cv" role="img" aria-label="Live candle chart"></canvas></div><div class="cfoot" id="cfoot"></div></section>
+    <aside class="side" id="side"></aside>
+    <section class="card bottom"><div class="tabs" id="tabs"></div><div id="btab"></div></section></div>`;
+  S.mounted = true;
+}
+async function terminal() {
+  if (!S.mounted || !$app.querySelector(".term")) mountTerminal();
+  const [st, latest, pos, appr, actv] = await Promise.all([api("/api/state"), api("/api/signals/latest"), api("/api/positions"), api("/api/approvals"), api("/api/activity?limit=30")]);
+  Object.assign(S, { st, latest, posd: pos, appr, actv });
+  if (!st.symbols.includes(S.sym)) S.sym = st.symbols[0] || "";
+  if (!S.tf) S.tf = (st.venues[S.venue] || {}).tf || 1;
+  renderBar(); renderBanners(); renderWatch(); renderHead(); renderBottom(); renderSide(); loadCandles();
+}
+function renderBanners() {
+  const st = S.st; let h = "";
+  if (st.halted && st.halted.on) h += `<div class="banner" role="alert"><strong>Trading halted.</strong><span>${esc(st.halted.reason)}</span><button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
+  for (const v of Object.values(st.venues)) {
+    if (v.halt && v.halt.on) h += `<div class="banner" role="alert"><strong>${esc(v.label)} venue paused.</strong><span>${esc(v.halt.reason)}</span><button class="btn sm" style="margin-left:auto" onclick="act('/api/resume',{},'Resumed')">Resume</button></div>`;
+    if (v.on && v.connected === false) h += `<div class="banner warn"><strong>${esc(v.label)} not connected.</strong><span class="mute">${esc(v.error)}</span><a class="btn sm" style="margin-left:auto" href="/api/diagnostics?venue=${v.name}">Diagnostics</a></div>`;
+  }
+  $("banners").innerHTML = h;
+}
+
+/* watchlist */
+function latestFor(sym) { return S.latest.find((r) => r.symbol === sym); }
+function renderWatch() {
+  const st = S.st, list = st.symbols;
+  $("wlc").textContent = list.length + " symbols";
+  $("wl").innerHTML = list.map((s) => {
+    const r = latestFor(s), sc = r ? r.score : null;
+    return `<div class="wl-r ${s === S.sym ? "sel" : ""}" role="button" tabindex="0" onclick="pickSym('${s}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickSym('${s}')}" aria-pressed="${s === S.sym}">
+      <span><b>${esc(s)}</b><i class="mute">${esc(r ? r.timeframe : "")}</i></span><span class="mono" id="wb-${s}">–</span><span class="mono" id="wa-${s}">–</span>
+      <span class="mono sc ${sc == null || Math.abs(sc) < (st.thresholds.score || 20) ? "mute" : sc > 0 ? "ok" : "bad"}">${sc == null ? "–" : (sc > 0 ? "+" : "") + Math.round(sc)}</span></div>`;
+  }).join("");
+  updateWatch();
+}
+function updateWatch() {
+  const row = S.px[S.venue] || {}, dr = S.dir[S.venue] || {};
+  for (const s of S.st.symbols) {
+    const p = row[s], b = $("wb-" + s), a = $("wa-" + s);
+    if (!p || !b) continue;
+    b.textContent = pxs(p[0], s); a.textContent = pxs(p[1], s);
+    const c = dr[s] > 0 ? "ok" : dr[s] < 0 ? "bad" : "";
+    b.className = a.className = "mono " + c;
+  }
+}
+window.pickSym = (s) => { S.sym = s; localStorage.setItem("fs", s); S.candleKey = ""; renderWatch(); renderHead(); renderSide(); renderBottom(); loadCandles(); };
+
+/* chart header */
+function renderHead() {
+  const st = S.st, v = st.venues[S.venue] || {};
+  $("chead").innerHTML = `<div class="ch-l"><b class="sym">${esc(S.sym)}</b><span class="mono big" id="hb">–</span><span class="mono mute" id="hs"></span></div>
+    <div class="tfs" role="group" aria-label="Chart candle size">${st.timeframes.map((m) => `<button aria-pressed="${m === S.tf}" onclick="pickTf(${m})">${m === 60 ? "1h" : m + "m"}</button>`).join("")}</div>`;
+  updateHead();
+}
+window.pickTf = (m) => { S.tf = m; S.candleKey = ""; renderHead(); loadCandles(); };
+function updateHead() {
+  const p = (S.px[S.venue] || {})[S.sym]; if (!p) return;
+  const dr = ((S.dir[S.venue] || {})[S.sym]) || 0, b = $("hb"), s = $("hs");
+  if (!b) return;
+  b.textContent = pxs(p[0], S.sym); b.className = "mono big " + (dr > 0 ? "ok" : dr < 0 ? "bad" : "");
+  s.textContent = "ask " + pxs(p[1], S.sym) + " · spread " + pxs(p[1] - p[0], S.sym);
+}
+
+/* candles */
+async function loadCandles() {
+  const key = [S.venue, S.sym, S.tf].join("|");
+  if (!S.sym || key === S.candleKey) return;
+  S.candleKey = key;
+  try {
+    const r = await api(`/api/candles?symbol=${S.sym}&tf=${S.tf}&venue=${S.venue}&n=140`);
+    if (key !== S.candleKey) return;
+    S.candles = r.candles; $("cfoot").textContent = "";
+  } catch (e) { S.candles = []; $("cfoot").textContent = "No candles: " + e.message; }
+  queueDraw();
+}
+function updateLiveCandle() {
+  const p = (S.px[S.venue] || {})[S.sym], c = S.candles; if (!p || !c.length) return;
+  const mid = (p[0] + p[1]) / 2, last = c[c.length - 1], now = Date.now() / 1000;
+  if (S.venue !== "paper" && now >= last[0] + S.tf * 60) c.push([Math.floor(now / (S.tf * 60)) * S.tf * 60, mid, mid, mid, mid]);
+  else { last[4] = mid; last[2] = Math.max(last[2], mid); last[3] = Math.min(last[3], mid); }
+  if (c.length > 400) c.shift();
+}
+function queueDraw() { if (S.drawQ) return; S.drawQ = true; requestAnimationFrame(() => { S.drawQ = false; drawChart(); }); }
+function openPos(sym) { return S.posd.open.find((p) => p.venue === S.venue && p.symbol === sym); }
+function drawChart() {
+  const cv = $("cv"); if (!cv) return;
+  const box = cv.parentElement, w = box.clientWidth, h = box.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (!w || !h) return;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const PAD = 76, slot = 8, n = Math.max(10, Math.floor((w - PAD - 12) / slot)), view = S.candles.slice(-n);
+  if (view.length < 2) { g.fillStyle = "#9C9EA6"; g.font = "13px Inter,sans-serif"; g.fillText("Loading candles…", 16, 28); return; }
+  const P = openPos(S.sym), d = dig(S.sym);
+  let lo = Math.min(...view.map((c) => c[3])), hi = Math.max(...view.map((c) => c[2]));
+  if (P) { lo = Math.min(lo, P.tp, P.sl, P.entry); hi = Math.max(hi, P.tp, P.sl, P.entry, P.sl0 || P.sl); }
+  const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  const Y = (v) => 8 + (1 - (v - lo) / (hi - lo)) * (h - 20), x0 = w - PAD - view.length * slot;
+  g.font = "11px 'JetBrains Mono',monospace"; g.textBaseline = "middle";
+  for (let i = 0; i <= 5; i++) { const v = lo + ((hi - lo) * i) / 5, y = Y(v); g.strokeStyle = "#1a1a1f"; g.setLineDash([3, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#6c6e75"; g.fillText(v.toFixed(d), w - PAD + 6, y); }
+  view.forEach((c, i) => {
+    const x = x0 + i * slot + slot / 2, up = c[4] >= c[1], col = up ? "#3DC48F" : "#F06D6D";
+    g.strokeStyle = col; g.fillStyle = col; g.beginPath(); g.moveTo(x, Y(c[2])); g.lineTo(x, Y(c[3])); g.stroke();
+    const t = Y(Math.max(c[1], c[4])), hh = Math.max(1, Math.abs(Y(c[1]) - Y(c[4]))); g.fillRect(x - 2.5, t, 5, hh);
+  });
+  const tag = (v, col, bg, txt, dash) => { const y = Y(v); g.strokeStyle = col; g.setLineDash(dash || []); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]);
+    const t = txt + " " + v.toFixed(d), tw = g.measureText(t).width + 10; g.fillStyle = bg; g.fillRect(w - PAD - tw - 4, y - 9, tw, 18); g.fillStyle = col; g.textAlign = "left"; g.fillText(t, w - PAD - tw + 1, y); };
+  if (P) {
+    tag(P.tp, "#3DC48F", "#12281c", "TP", [5, 4]); tag(P.entry, "#EDEDEE", "#26262b", "ENTRY");
+    tag(P.sl, "#F06D6D", "#2a1414", P.sl !== P.sl0 ? "SL · trailed" : "SL", [5, 4]);
+    if (P.sl !== P.sl0) { const y = Y(P.sl0); g.strokeStyle = "#5a3333"; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#8a6a6a"; g.fillText("first stop " + P.sl0.toFixed(d), 8, y - 8); }
+  }
+  const last = view[view.length - 1][4], yl = Y(last);
+  g.strokeStyle = "#F58A14"; g.beginPath(); g.moveTo(0, yl); g.lineTo(w - PAD, yl); g.stroke();
+  g.fillStyle = "#F58A14"; g.fillRect(w - PAD, yl - 10, PAD - 2, 20); g.fillStyle = "#16181B"; g.font = "600 12px 'JetBrains Mono',monospace"; g.fillText(last.toFixed(d), w - PAD + 5, yl);
+}
+window.addEventListener("resize", queueDraw);
+
+/* decision panel */
+async function renderSide() {
+  const el = $("side"); if (!el) return;
+  const r = latestFor(S.sym);
+  if (!r) { el.innerHTML = `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2></div><div class="pad mute">No cycle has analysed this symbol yet.</div></section>`; return; }
+  const vs = (r.venues || []).find((x) => x.venue === S.venue), id = vs ? vs.id : r.id;
+  if (id !== S.detId) { try { S.det = await api("/api/signal/" + id); S.detId = id; } catch (e) { S.det = null; } }
+  const s = S.det; if (!s || !$("side")) return;
+  const c = s.claude || {}, g = s.gate || {}, l = s.levels || {}, th = S.st.thresholds;
+  $("side").innerHTML = `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2><span class="mono mute">${hm(s.ts)}</span></div>
+      <div class="pad"><div style="display:flex;justify-content:space-between;align-items:baseline"><span>Rules score ${biasPill(s.bias)}</span><b class="mono big2 ${s.score >= 0 ? "ok" : "bad"}">${signed(s.score, 1)}</b></div>
+      <div class="mute" style="font-size:12px;margin:2px 0 8px">${s.agree}/${s.available} factors agree · needs ${th.agree_pct || 0}% and ±${th.score}</div>
+      ${Object.entries(s.factors || {}).map(([k, f]) => `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${f.score == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(f.score)}<span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "–" : signed(f.score, 0)}</span></div>`).join("")}</div></section>
+    <section class="card"><div class="hd"><h2>Risk gate · code</h2><span class="pill ${g.ok ? "buy" : g.checks ? "warn" : "none"}">${g.ok ? "passed" : g.checks ? "blocked" : "not run"}</span></div>
+      ${(g.checks || []).map((k) => `<div class="row sm"><span><span class="dot ${k.ok ? "g" : "r"}"></span>${esc(k.name)}</span><span class="mono mute" style="text-align:right">${esc(k.detail)}</span></div>`).join("") || '<div class="pad mute">The gate has not run for this signal.</div>'}</section>
+    <section class="card claude"><div class="hd"><h2>Claude · final say</h2><span class="pill ${c.decision === "YES" ? "buy" : "none"}">${esc(c.decision || "not asked")}${c.confidence != null ? " " + num(c.confidence, 2) : ""}</span></div>
+      ${c.thesis || c.against ? `<div class="pad"><p>${esc(c.thesis)}</p>${c.against ? `<div class="lab">Against</div><p>${esc(c.against)}</p>` : ""}${c.main_risk ? `<div class="lab">Main risk</div><p>${esc(c.main_risk)}</p>` : ""}</div>` : `<div class="pad mute">${esc(c.error || s.reason || "Claude was not asked.")}</div>`}</section>
+    <section class="card"><div class="hd"><h2>Order</h2><a href="#/signal/${s.id}">full detail</a></div>
+      <div class="row sm"><span>Entry</span><span class="mono">${esc(l.entry)}</span></div><div class="row sm"><span>Stop</span><span class="mono bad">${esc(l.sl)}</span></div>
+      <div class="row sm"><span>Target</span><span class="mono ok">${esc(l.tp)}</span></div><div class="row sm"><span>R:R · lots</span><span class="mono">${esc(l.rr)} · ${s.lots != null ? num(s.lots, 2) : "–"}</span></div>
+      <div class="row sm"><span>Status</span><span>${stPill(s.status)}</span></div></section>`;
+}
+
+/* bottom tabs */
+function renderBottom() {
+  const mine = S.posd.open.filter((p) => p.venue === S.venue), pend = S.appr.filter((a) => a.venue === S.venue);
+  const tabs = [["pos", `Positions (${mine.length})`], ["pend", `Pending approval (${pend.length})`], ["hist", "History"], ["log", "Journal"]];
+  $("tabs").innerHTML = tabs.map(([k, l]) => `<button class="${S.tab === k ? "on" : ""}" onclick="pickTab('${k}')">${l}</button>`).join("") + `<span class="mute tnote">positions re-priced on every tick · stops checked every 5 s</span>`;
+  let h = "";
+  if (S.tab === "pos") {
+    h = `<div class="tw"><div class="ptable"><div class="prow head"><span>SYMBOL</span><span>SIDE</span><span>LOTS</span><span>ENTRY</span><span>LIVE</span><span>STOP</span><span>STOP ◂ PRICE ▸ TARGET</span><span class="r">P/L</span><span class="r">R</span><span></span></div>
+      ${mine.map((p) => `<div class="prow" data-k="${p.venue}:${p.ticket}" data-e="${p.entry}" data-sl="${p.sl}" data-tp="${p.tp}" data-side="${p.side}">
+        <span><b>${esc(p.symbol)}</b> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
+        <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span class="mono bad">${pxs(p.sl, p.symbol)}</span>
+        <span class="pbar"><i class="pf"></i><i class="pn"></i></span><span class="mono r pl ${p.floating < 0 ? "bad" : "ok"}"><b>${money(p.floating)}</b></span><span class="mono r pr">–</span>
+        <button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></div>`).join("") || '<div class="pad mute" style="padding-top:16px">Nothing open on this venue.</div>'}</div></div>`;
+  } else if (S.tab === "pend") {
+    h = pend.length ? pend.map((s) => { const l = s.levels || {}; return `<div class="appr"><div class="what"><strong>${esc(s.symbol)}</strong> ${biasPill(s.bias)} <span class="mono mute">${num(s.lots, 2)} lots · entry ${esc(l.entry)} · SL ${esc(l.sl)} · TP ${esc(l.tp)}</span>
+        <div class="mono mute">expires ${hm(s.expires_at)} · <a href="#/signal/${s.id}">details</a></div></div><div><button class="btn pri sm" onclick="act('/api/approve/${s.id}',{},'Approved')">Approve</button> <button class="btn sm" onclick="act('/api/reject/${s.id}',{},'Rejected')">Reject</button></div></div>`; }).join("")
+      : `<div class="pad mute" style="padding-top:16px">Nothing waiting. ${(S.st.venues[S.venue] || {}).auto ? "Auto-approve is on, so cleared signals go straight to the broker." : ""}</div>`;
+  } else if (S.tab === "hist") {
+    const rows = S.posd.closed.filter((p) => p.venue === S.venue);
+    h = `<div class="tw"><table style="min-width:520px"><tbody>${rows.map((p) => `<tr><td><b>${esc(p.symbol)}</b> <span class="pill ${p.side === "BUY" ? "buy" : "sell"}">${esc(p.side)}</span></td><td class="mono">${num(p.lots, 2)} lots</td><td class="mono">${esc(p.entry)} → ${esc(p.close_price)}</td><td class="mono ${p.profit < 0 ? "bad" : "ok"}">${money(p.profit)}</td><td class="mono mute">${hm(p.closed_at)}</td></tr>`).join("") || '<tr><td class="mute">Nothing closed yet on this venue.</td></tr>'}</tbody></table></div>`;
+  } else {
+    h = S.actv.map((x) => `<div class="feed"><span class="t">${hm(x.ts)}</span><span class="${x.level === "error" ? "bad" : x.level === "warn" ? "warn" : ""}">${x.symbol ? "<strong>" + esc(x.symbol) + "</strong> " : ""}${esc(x.text)}${x.signal_id ? ` <a href="#/signal/${x.signal_id}">view</a>` : ""}</span></div>`).join("") || '<div class="pad mute">No activity yet.</div>';
+  }
+  $("btab").innerHTML = h;
+  updateLivePos();
+}
+window.pickTab = (k) => { S.tab = k; renderBottom(); };
+function updateLivePos() {
+  document.querySelectorAll(".prow[data-k]").forEach((row) => {
+    const L = S.live[row.dataset.k]; if (!L) return;
+    const sym = (S.posd.open.find((p) => p.venue + ":" + p.ticket === row.dataset.k) || {}).symbol || S.sym;
+    row.querySelector(".lv b").textContent = pxs(L.live, sym);
+    const pl = row.querySelector(".pl"); pl.className = "mono r pl " + (L.floating < 0 ? "bad" : "ok"); pl.firstChild.textContent = money(L.floating);
+    const pr = row.querySelector(".pr"); pr.textContent = (L.r >= 0 ? "+" : "") + L.r.toFixed(2) + "R"; pr.className = "mono r pr " + (L.r < 0 ? "bad" : "ok");
+    const e = +row.dataset.e, sl = +row.dataset.sl, tp = +row.dataset.tp, a = Math.min(sl, tp), b = Math.max(sl, tp), pc = (v) => Math.min(100, Math.max(0, ((v - a) / (b - a)) * 100));
+    const pe = pc(e), pn = pc(L.live), f = row.querySelector(".pf"), n = row.querySelector(".pn");
+    f.style.left = Math.min(pe, pn) + "%"; f.style.width = Math.abs(pn - pe) + "%"; f.style.background = (row.dataset.side === "BUY" ? L.live >= e : L.live <= e) ? "var(--buy)" : "var(--sell)"; n.style.left = "calc(" + pn + "% - 1px)";
+  });
+}
+
+/* ------------------------------------------------------------ settings */
+const swBtn = (on, label, path, body, confirmMsg) => `<button class="tg ${on ? "on" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" onclick="${confirmMsg ? `if(!confirm('${confirmMsg}'))return;` : ""}act('${path}',${body},'${esc(label)} ${on ? "off" : "on"}')"><i></i></button>`;
+async function settings() {
+  $app.className = "wrap"; S.mounted = false;
+  const st = await api("/api/state"); S.st = st; renderBar();
+  const r = st.risk, th = st.thresholds, V = Object.values(st.venues), u = st.usage, ag = st.feeds.ages_min, fast = st.profile === "fast";
+  const rail = [["venues", "Venues"], ["profile", "Trading profile"], ["risk", "Risk limits"], ["ai", "Claude and rules"], ["trailing", "Trailing stop"], ["symbols", "Symbols"], ["feeds", "Feeds and keys"], ["danger", "Danger zone"]];
+  const prof = [["Score needed", "±20", "±35"], ["Factors that must agree", "50%", "60%"], ["Candle must move (spreads)", "1.5", "2"], ["Stop no wider than (ATR)", "4", "3.5"], ["Auto chart climbs below (spreads)", "2.5", "3"], ["Claude re-asked after NO", "5 min", "15 min"], ["Claude confidence needed", "0.55", "0.60"], ["Max open trades", "5", "3"], ["Minimum reward : risk", "1.3", "1.5"]];
+  const all = Array.from(new Set(st.symbols_default.concat(st.symbols)));
+  const kv = (a, b) => `<div class="kv"><span>${a}</span><span class="mono">${b}</span></div>`;
+  const feed = (n, ok, extra) => `<div class="kv"><span><span class="dot ${ok ? "g" : "r"}"></span>${n}</span><span class="mono mute">${extra}</span></div>`;
+  $app.innerHTML = `<div class="set"><nav class="rail" aria-label="Settings sections"><span class="lab">SETTINGS</span>${rail.map(([id, l]) => `<a href="#/settings" onclick="document.getElementById('s-${id}').scrollIntoView({behavior:'smooth'});return false">${l}</a>`).join("")}</nav><div class="setc">
+    <section class="card sec" id="s-venues"><h2>Trading venues</h2><p class="mute">Three venues run side by side, each on its own candle size. Every switch takes effect on the next cycle.</p><div class="vgrid">${V.map((v) => `<div class="vcard"><div class="vh"><b>${esc(v.label)}</b><span class="pill ${v.name === "live" ? "warn" : v.connected === false ? "red" : "none"}">${v.locked ? "LOCKED" : v.connected === false ? "NOT CONNECTED" : v.name === "paper" ? "SIMULATED" : v.account && v.account.demo ? "DEMO" : "CONNECTED"}</span></div>
+      <div class="mute" style="font-size:12px">${esc(VDESC[v.name])}</div>
+      <div class="krow"><span>Trade</span>${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : swBtn(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}`, v.name === "live" && !v.on ? "Switch LIVE trading on? Real money on a real account." : "")}</div>
+      <div class="krow"><span>Auto-approve</span>${v.locked ? "" : swBtn(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`, v.name === "live" && !v.auto ? "Auto-approve LIVE trades? Orders will go out without your click." : "")}</div>
+      <div class="krow"><span>Chart candles</span><select aria-label="${esc(v.label)} candle size" onchange="act('/api/venue/${v.name}',{tf:Number(this.value)},'${esc(v.label)} candles set')">${st.timeframes.map((m) => `<option value="${m}" ${m === v.tf ? "selected" : ""}>${m === 60 ? "1 hour" : m + " min"}</option>`).join("")}</select></div>
+      ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset account…</button>` : v.name !== "paper" && v.connected === false ? `<a class="btn sm" href="/ctrader/connect">Connect cTrader</a>` : ""}</div>`).join("")}</div></section>
+    <section class="card sec" id="s-profile"><h2>Trading profile</h2><p class="mute">Fast takes more trades with looser entry filters. Loss limits, news blackout, spread checks and the Live lock apply in both.</p>
+      <div class="seg0"><button class="btn ${fast ? "pri" : ""}" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn ${fast ? "" : "pri"}" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div>
+      <div class="ptab"><span class="lab">RULE</span><span class="lab r">FAST</span><span class="lab r">NORMAL</span>${prof.map(([a, f, n]) => `<span>${a}</span><span class="mono r ${fast ? "acc" : "mute"}">${f}</span><span class="mono r ${fast ? "mute" : "acc"}">${n}</span>`).join("")}</div></section>
+    <section class="card sec" id="s-risk"><h2>Risk limits</h2><p class="mute">Enforced in code on every venue. A venue pauses itself when a loss limit is hit. Values come from the environment.</p>
+      ${kv("Risk per trade", r.risk_per_trade_pct + "%")}${kv("Daily loss limit", r.daily_loss_cap_pct + "%")}${kv("Max open trades", r.max_open)}${kv("Losses in a row before pause", r.max_loss_streak)}${kv("Total open risk limit", num(r.open_risk_cap_pct, 1) + "%")}${kv("Minimum reward : risk", th.min_rr)}</section>
+    <section class="card sec" id="s-ai"><h2>Claude and the rules</h2><p class="mute">The rules score a setup in code. Claude gives the final YES or NO on every trade that clears the gate.</p>
+      <div class="krow big"><div><b>Claude veto</b><div class="mute" style="font-size:12px">On: Claude can say NO. Off: trades follow the score and the gate alone.</div></div>${swBtn(st.claude_veto, "Claude veto", "/api/claude-veto", `{on:${!st.claude_veto}}`, st.claude_veto ? "Turn Claude's veto OFF? Trades will then follow the score and the risk gate alone." : "")}</div>
+      ${kv("Score threshold", "±" + th.score)}${kv("Factors that must agree", th.agree_pct ? th.agree_pct + "%" : th.agree)}${kv("Claude calls today", `${u.claude} / ${u.claude_cap}`)}</section>
+    <section class="card sec" id="s-trailing"><h2>Trailing stop</h2><p class="mute">R is the first stop distance. Locks profit as the trade moves your way.</p>
+      <div class="krow big"><div><b>Trailing stop</b></div>${swBtn(st.trail, "Trailing stop", "/api/trail", `{on:${!st.trail}}`)}</div>
+      <div class="note">At <b class="acc mono">+1.0R</b> the stop moves to break-even plus <b class="mono">0.2R</b>. From <b class="acc mono">+1.5R</b> it follows <b class="mono">0.75R</b> behind the price and the target moves <b class="mono">1.0R</b> ahead. The stop never loosens.</div></section>
+    <section class="card sec" id="s-symbols"><h2>Symbols</h2><p class="mute">${st.symbols.length} traded. Toggle a symbol to include it from the next cycle.</p><div class="chips2">${all.map((s) => { const on = st.symbols.includes(s); const list = on ? st.symbols.filter((x) => x !== s) : st.symbols.concat([s]); return `<button class="sc ${on ? "on" : ""}" aria-pressed="${on}" onclick="act('/api/symbols',{symbols:'${list.join(",")}'},'Symbols saved')" ${on && st.symbols.length <= 1 ? "disabled" : ""}>${esc(s)}</button>`; }).join("")}</div>
+      ${st.symbols_custom ? `<button class="btn sm" style="margin-top:12px" onclick="act('/api/symbols',{reset:true},'Back to the environment list')">Use environment list</button>` : ""}</section>
+    <section class="card sec" id="s-feeds"><h2>Data feeds and keys</h2>${feed("Claude API", st.feeds.claude_key, `${u.claude}/${u.claude_cap} today`)}${feed("FreeLLMAPI (news tagging)", st.feeds.freellm_url, `${u.freellm}/${u.freellm_cap} today`)}${feed("FRED macro", st.feeds.fred_key, ago(ag.macro))}${feed("CFTC positioning", ag.cot != null, ago(ag.cot))}${feed("Economic calendar", ag.calendar != null, ago(ag.calendar))}${feed("News", ag.news_run != null, ago(ag.news_run))}
+      <div style="margin-top:10px"><a href="/api/diagnostics">Open diagnostics</a></div></section>
+    <section class="card sec danger" id="s-danger"><h2>Danger zone</h2><p class="mute">Live trading uses real money and stays locked until you unlock it.</p><div style="display:flex;flex-wrap:wrap;gap:10px">
+      ${st.halted && st.halted.on ? `<button class="btn" onclick="act('/api/resume',{},'Resumed')">Resume trading</button>` : `<button class="btn dng" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">Halt all trading</button>`}
+      ${st.allow_live ? `<button class="btn" onclick="act('/api/allow-live',{on:false},'Live locked')">Lock Live</button>` : `<button class="btn" onclick="if(confirm('Unlock LIVE trading? Real money on a real account.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock Live…</button>`}
+      <button class="btn" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset Paper account…</button></div></section>
+  </div></div>`;
+}
+
 
 /* ------------------------------------------------------------ signal detail */
 function chart(closes, l, bias) {
@@ -304,13 +477,19 @@ async function render() {
   if (busy) return;
   busy = true;
   try {
-    const m = location.hash.match(/^#\/signal\/(\d+)/);
-    await (m ? detail(m[1]) : location.hash === "#/reports" ? reports() : location.hash === "#/specs" ? specs() : desk());
+    const pg = pageName();
+    if (pg !== "terminal") { S.mounted = false; $app.className = "wrap"; }
+    if (pg === "signal") { S.st = S.st || await api("/api/state"); renderBar(); await detail(location.hash.match(/(\d+)/)[1]); }
+    else if (pg === "reports") { S.st = await api("/api/state"); renderBar(); await reports(); }
+    else if (pg === "specs") { S.st = await api("/api/state"); renderBar(); await specs(); }
+    else if (pg === "settings") await settings();
+    else await terminal();
   } catch (e) {
-    if (!$app.querySelector("header")) $app.innerHTML = `<p class="bad" style="padding:40px 0">Could not load: ${esc(e.message)}</p>`;
+    if (!$app.innerHTML.trim() || $app.querySelector("p.mute")) $app.innerHTML = `<p class="bad" style="padding:40px 24px">Could not load: ${esc(e.message)}</p>`;
     else toast(e.message, true);
   } finally { busy = false; }
 }
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
+startStream();
 render();
-timer = setInterval(() => { if (!document.hidden && !location.hash.startsWith("#/signal") && location.hash !== "#/reports" && location.hash !== "#/specs") render(); }, 5000);
+timer = setInterval(() => { if (!document.hidden && pageName() === "terminal") render(); }, 4000);

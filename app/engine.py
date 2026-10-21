@@ -75,7 +75,7 @@ def open_positions_view(venue: str | None = None) -> list[dict]:
             q = q.where(Position.venue == venue)
         return [{"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl,
                  "tp": p.tp, "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price,
-                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue} for p in s.scalars(q).all()]
+                 "opened_at": iso(p.opened_at), "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl} for p in s.scalars(q).all()]
 
 
 def profit_rate(broker, info: dict, account: dict) -> float | None:

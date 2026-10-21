@@ -1,5 +1,6 @@
 """Anands Fino: web app, JSON API and the scheduler."""
 import base64
+import json
 import secrets
 import threading
 import time
@@ -8,7 +9,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
@@ -108,7 +109,7 @@ def pos_row(p: Position) -> dict:
     return {"ticket": p.ticket, "symbol": p.symbol, "side": p.side, "lots": p.lots, "entry": p.entry, "sl": p.sl, "tp": p.tp,
             "risk_usd": p.risk_usd, "floating": p.floating, "last_price": p.last_price, "status": p.status,
             "opened_at": iso(p.opened_at), "closed_at": iso(p.closed_at), "profit": p.profit, "close_price": p.close_price,
-            "signal_id": p.signal_id, "venue": p.venue}
+            "signal_id": p.signal_id, "venue": p.venue, "sl0": p.sl0 or p.sl}
 
 
 # ---------------------------------------------------------------- API
@@ -163,6 +164,75 @@ def api_positions():
         opened = s.scalars(select(Position).where(Position.status == "open").order_by(Position.opened_at.desc())).all()
         closed = s.scalars(select(Position).where(Position.status == "closed").order_by(Position.closed_at.desc()).limit(15)).all()
         return {"open": [pos_row(p) for p in opened], "closed": [pos_row(p) for p in closed]}
+
+
+@app.get("/api/candles")
+def api_candles(symbol: str, tf: int = 1, venue: str = "paper", n: int = 120):
+    """Recent candles [time, open, high, low, close] (the last one is still forming) for the terminal chart."""
+    cfg = get_settings()
+    if venue not in venues.VENUES or symbol.upper() not in cfg.symbol_list or tf not in venues.TIMEFRAMES:
+        raise HTTPException(400, "unknown venue, symbol or timeframe")
+    try:
+        b = get_broker(venue)
+        b.connect()
+        df = b.rates(cfg.broker_symbol(symbol.upper()), max(n + 60, 200), tf)
+    except BrokerError as e:
+        raise HTTPException(502, str(e)) from e
+    df = df.tail(n)
+    return {"symbol": symbol.upper(), "tf": tf, "venue": venue,
+            "candles": [[int(t.timestamp()), float(o), float(h), float(l), float(c)] for t, o, h, l, c in zip(df["time"], df["open"], df["high"], df["low"], df["close"])]}
+
+
+@app.get("/api/stream")
+def api_stream():
+    """Server-sent events: live bid/ask for every symbol on each active venue, plus the live value of every open trade, about 4 times a second."""
+    def gen():
+        cfg = get_settings()
+        opens, opens_at, pvs = [], 0.0, {}
+        while True:
+            t0 = time.time()
+            try:
+                if t0 - opens_at > 1.5:
+                    opens, opens_at = engine.open_positions_view(), t0
+                active = [v for v in venues.VENUES if not venues.locked(v) and (venues.venue_cfg(v)["on"] or any(p["venue"] == v for p in opens))]
+                px, brokers = {}, {}
+                for v in active:
+                    try:
+                        b = get_broker(v)
+                        b.connect()
+                        brokers[v] = b
+                    except BrokerError:
+                        continue
+                    row = {}
+                    for sym in cfg.symbol_list:
+                        try:
+                            tk = b.tick(cfg.broker_symbol(sym))
+                            row[sym] = [tk["bid"], tk["ask"]]
+                        except BrokerError:
+                            continue
+                    px[v] = row
+                pos = []
+                for p in opens:
+                    row = px.get(p["venue"], {}).get(p["symbol"])
+                    b = brokers.get(p["venue"])
+                    if not row or b is None:
+                        continue
+                    key = (p["venue"], p["symbol"])
+                    if key not in pvs or t0 - pvs[key][1] > 30:
+                        try:
+                            info = b.symbol_info(cfg.broker_symbol(p["symbol"]))
+                            pvs[key] = (info["trade_contract_size"] * (engine.profit_rate(b, info, b.account()) or 0.0), t0)
+                        except BrokerError:
+                            continue
+                    d = 1 if p["side"] == "BUY" else -1
+                    live = row[0] if d == 1 else row[1]
+                    risk = abs(p["entry"] - p["sl0"]) or 1.0
+                    pos.append({"venue": p["venue"], "ticket": p["ticket"], "live": live, "floating": d * (live - p["entry"]) * p["lots"] * pvs[key][0], "r": d * (live - p["entry"]) / risk})
+                yield "data: " + json.dumps({"ts": int(time.time() * 1000), "px": px, "pos": pos}) + "\n\n"
+            except Exception:  # noqa: BLE001  (never let one bad cycle end the stream)
+                yield ": hiccup\n\n"
+            time.sleep(max(0.05, 0.25 - (time.time() - t0)))
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/report")

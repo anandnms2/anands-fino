@@ -286,3 +286,30 @@ def test_target_is_capped_in_atr():
     assert abs(lv["tp"] - 104.5) < 1e-9 and lv["rr"] == 1.5                     # capped at the 1.5R floor, not 3 ATR (below it)
     lv = scoring.build_levels("BUY", tech, tick, 2, 1.5, 2.0, 0.0, 3.0, 1.5)    # stop 1.5 ATR: 2R = 3 ATR, within the cap
     assert abs(lv["tp"] - 103.0) < 1e-9 and lv["rr"] == 2.0
+
+
+def test_stream_and_candles_endpoints():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app, headers={"Authorization": "Basic " + __import__("base64").b64encode(b"admin:secret").decode()})
+    r = c.get("/api/candles", params={"symbol": "XAUUSD", "tf": 1, "venue": "demo"})
+    assert r.status_code == 200 and len(r.json()["candles"]) > 10 and len(r.json()["candles"][0]) == 5
+    assert c.get("/api/candles", params={"symbol": "NOPE", "tf": 1, "venue": "demo"}).status_code == 400
+
+
+def test_stream_payload_has_prices_and_live_positions():
+    import json as _json
+    from app import broker, venues
+    from app.db import Position, session, utcnow
+    from app.main import api_stream
+    venues.set_venue("demo", on=True)
+    mb = broker.get_broker("demo")
+    mb.connect()
+    tk = mb.send_market("XAUUSD", "BUY", 0.1, 90.0, 120.0, 1, 10)["order"]
+    with session() as s:
+        s.add(Position(ticket=tk, venue="demo", symbol="XAUUSD", side="BUY", lots=0.1, entry=100.0, sl=90.0, tp=120.0, risk_usd=10, opened_at=utcnow()))
+        s.commit()
+    import asyncio
+    chunk = asyncio.run(api_stream().body_iterator.__anext__())
+    d = _json.loads(chunk.split("data: ", 1)[1])
+    assert "XAUUSD" in d["px"]["demo"] and d["pos"] and d["pos"][0]["ticket"] == tk and "floating" in d["pos"][0]
