@@ -59,7 +59,7 @@ async function desk() {
     <div class="brand"><img src="/static/logo.png" alt=""><div><h1>Anands Fino</h1><div class="lab">Forex &amp; metals desk</div></div></div>
     <div class="tools">
       ${st.mock ? '<span class="pill warn">MOCK broker</span>' : ""}
-      ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
+      ${Object.values(V).filter((v) => v.on).map((v) => `<span class="pill ${v.connected === false ? "red" : v.name === "live" ? "warn" : "buy"}">${esc(v.label)} ${esc(v.tf_label)} ${v.auto ? "auto" : "manual"}</span>`).join("") || '<span class="pill none">No venue on: signals only</span>'}
       <span class="pill ${st.market_open ? "buy" : "none"}">Market ${st.market_open ? "open" : "closed"}</span>
       <a class="btn" href="#/reports">Reports</a>
       <button class="btn pri" onclick="act('/api/cycle?force=true',{},'Cycle started')">Run cycle now</button>
@@ -90,6 +90,7 @@ async function desk() {
       <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;align-items:center">
         <span class="lab">Trade ${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : sw(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}` ).replace("onclick=\"", v.name === "live" && !v.on ? "onclick=\"if(!confirm('Switch LIVE trading on? Real money on a real account.'))return;" : "onclick=\"")}</span>
         <span class="lab">Auto-approve ${v.locked ? "" : sw(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`).replace("onclick=\"", v.name === "live" && !v.auto ? "onclick=\"if(!confirm('Auto-approve LIVE trades? Orders will go out without your click.'))return;" : "onclick=\"")}</span>
+        <span class="lab">Candles <select aria-label="${esc(v.label)} chart timeframe" onchange="act('/api/venue/${v.name}',{tf:Number(this.value)},'${esc(v.label)} timeframe set')" style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:12px var(--font-mono)">${st.timeframes.map((m) => `<option value="${m}" ${m === v.tf ? "selected" : ""}>${m === 60 ? "1 hour" : m + " min"}</option>`).join("")}</select></span>
         ${v.name === "paper" ? `<button class="btn sm" onclick="askAct('Reset the paper account? Balance and history are cleared.','/api/paper/reset','Paper account reset')">Reset</button>` : ""}
       </div></div>`;
   }).join("")}</section>`;
@@ -116,7 +117,7 @@ async function desk() {
     <td>${(s.venues || []).length ? s.venues.map((x) => `<a href="#/signal/${x.id}">${vPill(x.venue)} ${stPill(x.status)}</a>`).join(" ") : stPill(s.status)}<div class="mute" style="font-size:12px;max-width:340px">${esc((s.venues || []).length ? "" : s.reason)}</div></td>
     <td class="mono mute">${hm(s.ts)}</td></tr>`).join("");
   html += `<div class="grid"><div class="col-main">
-    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">${esc(st.timeframe)} candles · threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
+    <section class="card"><div class="hd"><h2>Latest cycle</h2><span class="mute mono">threshold ±${st.thresholds.score} · ${st.thresholds.agree_pct ? st.thresholds.agree_pct + "% of factors" : st.thresholds.agree + "+ factors"} agree</span></div>
       <div class="tw"><table><thead><tr><th>Symbol</th><th>Bias</th><th>Score</th><th>Claude</th><th>Outcome</th><th>At</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="6" class="mute">No cycle has run yet. Press “Run cycle now”.</td></tr>'}</tbody></table></div></section>`;
 
@@ -134,6 +135,13 @@ async function desk() {
   html += `<section class="card"><div class="hd"><h2>Activity</h2></div>${act_.map((x) => `<div class="feed"><span class="t">${hm(x.ts)}</span>
     <span class="${x.level === "error" ? "bad" : x.level === "warn" ? "warn" : ""}">${x.symbol ? "<strong>" + esc(x.symbol) + "</strong> " : ""}${esc(x.text)}${x.signal_id ? ` <a href="#/signal/${x.signal_id}">view</a>` : ""}</span></div>`).join("") || '<div class="pad mute">No activity yet.</div>'}</section>
     </div><div class="col-side">`;
+
+  html += `<section class="card"><div class="hd"><h2>Symbols</h2><span class="mono mute">${st.symbols.length} traded${st.symbols_custom ? " · set here" : " · from environment"}</span></div><div class="pad">
+    <div class="mono" style="font-size:12px;margin-bottom:8px;word-break:break-word">${st.symbols.map(esc).join(" · ")}</div>
+    <textarea id="symIn" rows="3" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px var(--font-mono)">${esc(st.symbols_default.join(","))}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn sm pri" onclick="act('/api/symbols',{symbols:document.getElementById('symIn').value},'Symbols saved')">Save list</button>
+    ${st.symbols_custom ? `<button class="btn sm" onclick="act('/api/symbols',{reset:true},'Back to the environment list')">Use environment list</button>` : ""}</div>
+    <div class="mute" style="font-size:12px;margin-top:6px">Takes effect on the next cycle. The textarea starts from the built-in list.</div></div></section>`;
 
   html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>

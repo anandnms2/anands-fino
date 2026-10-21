@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     # timing
     cycle_delay_seconds: int = 15
     timeframe_min: int = 3             # candle size the whole analysis runs on (1, 2, 3, 4, 5, 10, 15, 30 or 60); one cycle per candle
+    min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
+    min_stop_spreads: float = 12.0     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
     claude_cooldown_min: int = 15      # after Claude says NO to a symbol and direction, do not ask again for this long
     run_cycle_on_start: bool = False
     scheduler_enabled: bool = True
@@ -123,6 +125,15 @@ class Settings(BaseSettings):
 
     @property
     def symbol_list(self) -> list[str]:
+        """The dashboard's list wins over the SYMBOLS environment variable (Coolify freezes old values)."""
+        try:
+            from .db import kv_get
+
+            over = kv_get("symbols")
+            if over:
+                return list(over)
+        except Exception:  # noqa: BLE001  (database not ready yet)
+            pass
         return [s.strip().upper() for s in self.symbols.split(",") if s.strip()]
 
     @property

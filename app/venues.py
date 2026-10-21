@@ -8,6 +8,7 @@ from .config import get_settings
 from .db import iso, kv_get, kv_set, log, utcnow
 
 VENUES = ("paper", "demo", "live")
+TIMEFRAMES = (1, 3, 5, 15, 30, 60)  # minutes; the chart and candle size a venue trades on
 LABEL = {"paper": "Paper", "demo": "Demo", "live": "Live"}
 
 
@@ -27,13 +28,28 @@ def set_allow_live(on: bool) -> bool:
     return allow_live()
 
 
+def _tf0() -> int:
+    tf = get_settings().timeframe_min
+    return tf if tf in TIMEFRAMES else 3
+
+
+def venue_tf(v: str) -> int:
+    tf = venue_cfg(v).get("tf")
+    return tf if tf in TIMEFRAMES else _tf0()
+
+
+def due(tf: int, now: datetime) -> bool:
+    """True when a candle of `tf` minutes has just closed (checked once a minute)."""
+    return now.minute == 0 if tf >= 60 else now.minute % tf == 0
+
+
 def _defaults(v: str) -> dict:
     cfg = get_settings()
     if v == "paper":
-        return {"on": bool(cfg.paper_mode), "auto": True}
+        return {"on": bool(cfg.paper_mode), "auto": True, "tf": _tf0()}
     if v == "demo":
-        return {"on": cfg.mode == "demo_auto", "auto": True}
-    return {"on": cfg.mode in ("live_approval", "live_auto") and allow_live(), "auto": cfg.mode == "live_auto"}
+        return {"on": cfg.mode == "demo_auto", "auto": True, "tf": _tf0()}
+    return {"on": cfg.mode in ("live_approval", "live_auto") and allow_live(), "auto": cfg.mode == "live_auto", "tf": _tf0()}
 
 
 def venue_cfg(v: str) -> dict:
@@ -50,7 +66,7 @@ def locked(v: str) -> bool:
     return v == "live" and not allow_live()
 
 
-def set_venue(v: str, on: bool | None = None, auto: bool | None = None) -> dict:
+def set_venue(v: str, on: bool | None = None, auto: bool | None = None, tf: int | None = None) -> dict:
     if v not in VENUES:
         raise ValueError(f"venue must be one of {list(VENUES)}")
     if v == "live" and (on or auto) and not allow_live():
@@ -61,9 +77,13 @@ def set_venue(v: str, on: bool | None = None, auto: bool | None = None) -> dict:
         cur["on"] = bool(on)
     if auto is not None:
         cur["auto"] = bool(auto)
+    if tf is not None:
+        if int(tf) not in TIMEFRAMES:
+            raise ValueError(f"timeframe must be one of {list(TIMEFRAMES)} minutes")
+        cur["tf"] = int(tf)
     all_[v] = cur
     kv_set("venues", all_)
-    log(f"{LABEL[v]} venue: {'ON' if cur['on'] else 'OFF'}, {'auto-approve' if cur['auto'] else 'manual approval'}", "warn")
+    log(f"{LABEL[v]} venue: {'ON' if cur['on'] else 'OFF'}, {'auto-approve' if cur['auto'] else 'manual approval'}, {cur.get('tf', _tf0())} minute candles", "warn")
     return venue_cfg(v)
 
 

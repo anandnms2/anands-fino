@@ -50,6 +50,9 @@ def evaluate(*, cfg: Settings, symbol: str, bias: str, levels: dict, confidence:
     loss_pct = (account["equity"] - day_start_equity) / day_start_equity * 100 if day_start_equity else 0.0
     add(f"Daily result {loss_pct:+.2f}%, loss cap {cfg.daily_loss_cap_pct:.2f}%", loss_pct > -cfg.daily_loss_cap_pct)
     add(f"Losses in a row {loss_streak} of {cfg.max_loss_streak}", loss_streak < cfg.max_loss_streak)
+    atr = levels.get("atr") or 0.0
+    add(f"Market moving: ATR {atr:g} vs spread {spread_price:g}", not atr or spread_price <= 0 or atr >= cfg.min_atr_to_spread * spread_price,
+        f"needs ATR of at least {cfg.min_atr_to_spread:g}x the spread")
     spread_ok = stop > 0 and spread_price <= cfg.max_spread_to_stop * stop
     add(f"Spread {spread_price:g}, limit {cfg.max_spread_to_stop * stop:g}", spread_ok)
 

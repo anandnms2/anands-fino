@@ -213,3 +213,16 @@ def test_report_per_venue(monkeypatch):
     d = r["venues"]["demo"]
     assert d["trades"] >= 1 and d["net"] < 0 and d["losses"] == d["trades"] and d["win_rate"] == 0
     assert r["venues"]["live"]["trades"] == 0 and d["by_symbol"] and d["recent"]
+
+
+def test_symbols_editable_from_dashboard(monkeypatch):
+    from app.main import app
+    monkeypatch.setenv("SYMBOLS", "EURUSD,GBPUSD")  # a stale Coolify value
+    get_settings.cache_clear()
+    c = TestClient(app); a = ("admin", "secret"); H = {"X-Requested-With": "fino"}
+    assert get_settings().symbol_list == ["EURUSD", "GBPUSD"]
+    r = c.post("/api/symbols", auth=a, headers=H, json={"symbols": "xauusd, eurusd usdjpy"})
+    assert r.json()["symbols"] == ["XAUUSD", "EURUSD", "USDJPY"]
+    assert c.get("/api/state", auth=a).json()["symbols_custom"] is True
+    assert c.post("/api/symbols", auth=a, headers=H, json={"symbols": "bad!"}).status_code == 400
+    assert c.post("/api/symbols", auth=a, headers=H, json={"reset": True}).json()["symbols"] == ["EURUSD", "GBPUSD"]

@@ -144,47 +144,69 @@ def _venue_ready(v: str):
 
 def _run_cycle(force: bool) -> dict:
     cfg = get_settings()
-    cycle_id = utcnow().strftime("%Y%m%d%H") + "-" + uuid.uuid4().hex[:4]
+    now = utcnow()
+    cycle_id = now.strftime("%Y%m%d%H%M") + "-" + uuid.uuid4().hex[:4]
+    if now.minute == 0:
+        prune()
     if halted()["on"]:
         log(f"Cycle skipped: halted ({halted()['reason']})", "warn")
         return {"ok": False, "note": "halted"}
     if not force and not market_open():
-        log("Cycle skipped: forex market is closed", "info")
         return {"ok": False, "note": "market closed"}
 
-    # venues that may trade this cycle, each with its own broker, account and book
-    vctx = {}
-    for v in V.enabled():
+    # each venue has its own chart timeframe: only the venues whose candle just closed take part (all of them when forced)
+    due = [v for v in V.enabled() if force or V.due(V.venue_tf(v), now)]
+    groups: dict[int, list[str]] = {}
+    for v in due:
         if V.venue_halt(v)["on"]:
             log(f"{V.LABEL[v]} venue is paused: {V.venue_halt(v)['reason']}", "warn")
             continue
-        r = _venue_ready(v)
-        if r:
-            b, acct = r
-            vctx[v] = {"broker": b, "account": acct, "start_eq": V.day_start_equity(v, acct),
-                       "positions": open_positions_view(v), "auto": V.venue_cfg(v)["auto"]}
+        groups.setdefault(V.venue_tf(v), []).append(v)
+    if not V.enabled() and (force or V.due(cfg.timeframe_min, now)):
+        groups[cfg.timeframe_min] = []   # nothing is on: analyse and record signals only
+    if not groups:
+        return {"ok": True, "cycle_id": cycle_id, "results": {}, "note": "no timeframe is due"}
 
+    results = {}
+    for tf, vlist in sorted(groups.items()):
+        vctx = {}
+        for v in vlist:
+            r = _venue_ready(v)
+            if r:
+                bk, acct = r
+                vctx[v] = {"broker": bk, "account": acct, "start_eq": V.day_start_equity(v, acct),
+                           "positions": open_positions_view(v), "auto": V.venue_cfg(v)["auto"]}
+        if vlist and not vctx:
+            continue
+        res = _analyse(cfg, cycle_id, tf, vctx, force)
+        if res is None:
+            return {"ok": False, "note": "no price source"}
+        for sym, r in res.items():
+            results[sym if len(groups) == 1 else f"{tf_label(tf)}:{sym}"] = r
+    return {"ok": True, "cycle_id": cycle_id, "results": results}
+
+
+def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> dict | None:
+    """One analysis pass on `tf` minute candles for the venues in `vctx`; returns {symbol: outcome}."""
     # one set of candles for the analysis: a trading venue's broker if there is one, else demo or the paper feed
     order = [v for v in ("demo", "live", "paper") if v in vctx] or ["demo", "paper"]
-    broker, data_v = None, None
+    broker = None
     for v in order:
         try:
             b = vctx[v]["broker"] if v in vctx else get_broker(v)
             b.connect()
             sync_offset(b, cfg)
             b.account()
-            broker, data_v = b, v
+            broker = b
             break
         except BrokerError as e:
             log(f"Price source {V.LABEL[v]} unavailable: {e}", "warn")
     if broker is None:
         log("Cycle aborted: no price source is reachable", "error")
-        return {"ok": False, "note": "no price source"}
+        return None
 
     macro = (collectors.snapshot("macro") or {}).get("data")
     cot = (collectors.snapshot("cot") or {}).get("data")
-    if utcnow().minute < cfg.timeframe_min:
-        prune()
 
     # 1. technicals for every symbol
     techs, infos, ticks, closes, candle_times, stale = {}, {}, {}, {}, {}, {}
@@ -192,7 +214,7 @@ def _run_cycle(force: bool) -> dict:
         bsym = cfg.broker_symbol(sym)
         try:
             info = broker.symbol_info(bsym)
-            df = broker.rates(bsym, 500 if cfg.timeframe_min >= 30 else 1500)
+            df = broker.rates(bsym, 3500 if tf <= 1 else 500 if tf >= 30 else 1500, tf)
             tick = broker.tick(bsym)
         except BrokerError as e:
             log(f"{sym}: {e}", "error", sym)
@@ -203,8 +225,8 @@ def _run_cycle(force: bool) -> dict:
             continue
         last_open = closed["time"].iloc[-1]
         age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
-        stale[sym] = (not force) and age_min > 4 * cfg.timeframe_min + 2
-        techs[sym] = compute_technicals(closed, info["digits"], cfg.timeframe_min)
+        stale[sym] = (not force) and age_min > 4 * tf + 2
+        techs[sym] = compute_technicals(closed, info["digits"], tf)
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
         candle_times[sym] = iso(last_open.to_pydatetime())
@@ -242,7 +264,7 @@ def _run_cycle(force: bool) -> dict:
         factors, comb = prep[sym]
 
         def mk(venue: str = "") -> Signal:
-            return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
+            return Signal(cycle_id=cycle_id, symbol=sym, timeframe=tf_label(tf), candle_time=candle_times[sym], bias=comb["bias"], score=comb["score"],
                           agree=comb["agree"], available=comb["available"], factors=factors, venue=venue,
                           mode=(f"{venue}:{'auto' if vctx[venue]['auto'] else 'manual'}" if venue in vctx else ""),
                           context={"closes": closes[sym]})
@@ -258,12 +280,12 @@ def _run_cycle(force: bool) -> dict:
             elif not cfg.min_agree_pct and comb["agree"] < cfg.min_agree:
                 why.append(f"{comb['agree']} factors agree, {cfg.min_agree} needed")
             sig.status, sig.reason = "no_trade", "No trade: " + " and ".join(why)
-            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
+            sig.levels = scoring.build_levels("BUY" if comb["score"] >= 0 else "SELL", tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads)
             sid = _save(sig)
             results[sym] = sig.status
             continue
 
-        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target)
+        levels = scoring.build_levels(comb["bias"], tech, tick, info["digits"], cfg.stop_atr_mult, cfg.rr_target, cfg.min_stop_spreads)
         sig.levels = levels
         if not vctx:
             sig.status, sig.reason = "alerted", "No trading venue is switched on: signal recorded, no order"
@@ -318,7 +340,7 @@ def _run_cycle(force: bool) -> dict:
 
         # do not pester Claude: after a NO on this symbol and direction, wait out the cooldown
         with session() as s:
-            recent_no = s.scalars(select(Signal).where(Signal.symbol == sym, Signal.bias == comb["bias"], Signal.status == "claude_no",
+            recent_no = s.scalars(select(Signal).where(Signal.symbol == sym, Signal.bias == comb["bias"], Signal.status == "claude_no", Signal.timeframe == tf_label(tf),
                                                        Signal.ts >= utcnow() - timedelta(minutes=cfg.claude_cooldown_min))).first()
         if recent_no is not None:
             results[sym] = "claude_cooldown"
@@ -327,7 +349,7 @@ def _run_cycle(force: bool) -> dict:
         # Claude has the final say, once per symbol, and every venue shares the answer
         v0 = passed[0]
         ctx = _claude_context(sym, comb, factors, levels, tech, closes[sym], news24, cb_items, macro, cot, vctx[v0]["positions"],
-                              vctx[v0]["account"], vctx[v0]["start_eq"], info)
+                              vctx[v0]["account"], vctx[v0]["start_eq"], info, tf_label(tf))
         claude_input = {k: v for k, v in ctx.items() if k != "recent_closes"}
         dec = decide(ctx)
         if dec["decision"] != "YES":
@@ -355,7 +377,7 @@ def _run_cycle(force: bool) -> dict:
             outcome.append(f"{v}:{_dispatch(sid)}")
             vctx[v]["positions"] = open_positions_view(v)
         results[sym] = ", ".join(outcome)
-    return {"ok": True, "cycle_id": cycle_id, "results": results}
+    return results
 
 
 def prune() -> None:
@@ -381,11 +403,11 @@ def _save(sig: Signal) -> int:
         return sig.id
 
 
-def _claude_context(sym, comb, factors, levels, tech, closes, news24, cb_items, macro, cot, positions, account, start_eq, info) -> dict:
+def _claude_context(sym, comb, factors, levels, tech, closes, news24, cb_items, macro, cot, positions, account, start_eq, info, tf_name="H1") -> dict:
     heads = [{"title": n.title, "effect": (n.tags or {}).get(sym, 0)} for n in sorted(news24, key=lambda x: x.published, reverse=True)
              if n.tags is not None and (n.tags or {}).get(sym, 0) != 0][:12]
     return {
-        "symbol": sym, "timeframe": tf_label(), "proposed_side": comb["bias"],
+        "symbol": sym, "timeframe": tf_name, "proposed_side": comb["bias"],
         "composite_score": comb["score"], "factors_agreeing": f"{comb['agree']} of {comb['available']}",
         "factors": {k: {"score": None if v["score"] is None else round(v["score"]), "weight": v["weight"], "reading": v["reading"]} for k, v in factors.items()},
         "levels": levels,
@@ -581,7 +603,7 @@ def venue_state(v: str) -> dict:
     cfg = get_settings()
     vc = V.venue_cfg(v)
     positions = open_positions_view(v)
-    out = {"name": v, "label": V.LABEL[v], "on": vc["on"], "auto": vc["auto"], "locked": V.locked(v),
+    out = {"name": v, "label": V.LABEL[v], "on": vc["on"], "auto": vc["auto"], "tf": V.venue_tf(v), "tf_label": tf_label(V.venue_tf(v)), "locked": V.locked(v),
            "halt": V.venue_halt(v), "account": None, "error": "", "connected": None,
            "loss_streak": V.loss_streak(v), "open_count": len(positions),
            "open_risk_usd": sum(p["risk_usd"] for p in positions), "positions": positions,
@@ -611,14 +633,19 @@ def state() -> dict:
     from .llm import usage
 
     now = utcnow()
-    tf = max(1, min(60, cfg.timeframe_min))
-    nxt = now.replace(minute=(now.minute // tf) * tf, second=cfg.cycle_delay_seconds, microsecond=0)
-    if nxt <= now:
-        nxt += timedelta(minutes=tf)
+    tfs = [V.venue_tf(v) for v in V.enabled()] or [cfg.timeframe_min]
+    nxt = None
+    for tf in tfs:
+        n = now.replace(second=cfg.cycle_delay_seconds, microsecond=0)
+        for _ in range(62):
+            if n > now and V.due(tf, n):
+                break
+            n += timedelta(minutes=1)
+        nxt = n if nxt is None or n < nxt else nxt
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
         "now": iso(now), "allow_live": V.allow_live(), "halted": halted(),
-        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed, "timeframe": tf_label(),
+        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed, "timeframes": list(V.TIMEFRAMES),
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct},
@@ -628,6 +655,6 @@ def state() -> dict:
         "feeds": {"ages_min": ages, "fred_key": bool(cfg.fred_api_key), "claude_key": bool(cfg.anthropic_api_key),
                   "freellm_url": bool(cfg.freellmapi_base_url)},
         "events": collectors.upcoming_events(),
-        "symbols": cfg.symbol_list,
+        "symbols": cfg.symbol_list, "symbols_custom": bool(kv_get("symbols")), "symbols_default": [s.strip().upper() for s in cfg.symbols.split(",") if s.strip()],
         "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},
     }

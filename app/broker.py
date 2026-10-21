@@ -113,9 +113,9 @@ class RemoteBroker:
             raise BrokerError(f"no tick for {symbol}")
         return r
 
-    def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
+    def rates(self, symbol: str, count: int = 500, tf: int | None = None) -> pd.DataFrame:
         """Candles of the configured timeframe in UTC, oldest first. The last row is the candle still forming."""
-        tfc = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 10: 10, 15: 15, 30: 30, 60: TIMEFRAME_H1}.get(get_settings().timeframe_min, TIMEFRAME_H1)
+        tfc = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 10: 10, 15: 15, 30: 30, 60: TIMEFRAME_H1}.get(tf or get_settings().timeframe_min, TIMEFRAME_H1)
         expr = "(lambda r: None if r is None else r.tolist())(mt5.copy_rates_from_pos(%r, %d, 0, %d))" % (symbol, tfc, count)
         rows = self._eval(expr)
         if not rows:
@@ -229,14 +229,14 @@ class MockBroker:
         steps = rng.normal(0.0004, 0.0035, n)  # gentle upward drift
         return base * np.exp(np.cumsum(steps) - steps.sum())
 
-    def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
+    def rates(self, symbol: str, count: int = 500, tf: int | None = None) -> pd.DataFrame:
         close = self._series(symbol, count)
         rng = np.random.default_rng(7)
         open_ = np.concatenate([[close[0]], close[:-1]])
         wick = np.abs(rng.normal(0, close * 0.0012))
         high = np.maximum(open_, close) + wick
         low = np.minimum(open_, close) - wick
-        tf = get_settings().timeframe_min
+        tf = tf or get_settings().timeframe_min
         now = pd.Timestamp.now(tz="UTC").floor(f"{tf}min")
         times = [now - pd.Timedelta(minutes=tf * (count - 1 - i)) for i in range(count)]
         return pd.DataFrame({"time": times, "open": open_, "high": high, "low": low, "close": close,

@@ -44,8 +44,8 @@ async def lifespan(app: FastAPI):
     cfg = get_settings()
     init_db()
     if cfg.scheduler_enabled:
-        tf = cfg.timeframe_min
-        scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute=f"*/{tf}" if tf < 60 else 0, second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
+        # every minute; each venue only trades when a candle of its own timeframe has just closed
+        scheduler.add_job(job("cycle", engine.run_cycle), "cron", minute="*", second=cfg.cycle_delay_seconds, max_instances=1, coalesce=True)
         scheduler.add_job(job("reconcile", engine.reconcile), "interval", seconds=30, max_instances=1, coalesce=True)
         scheduler.add_job(job("news", refresh_news), "interval", minutes=5, max_instances=1, coalesce=True)
         scheduler.add_job(job("calendar", collectors.fetch_calendar), "interval", minutes=60, max_instances=1, coalesce=True)
@@ -273,9 +273,29 @@ def api_venue(name: str, body: dict = Body(...)):
     try:
         on = body.get("on")
         auto = body.get("auto")
-        return venues.set_venue(name, None if on is None else bool(on), None if auto is None else bool(auto))
+        tf = body.get("tf")
+        return venues.set_venue(name, None if on is None else bool(on), None if auto is None else bool(auto), None if tf is None else int(tf))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/symbols")
+def api_symbols(body: dict = Body(...)):
+    """Set the traded symbols from the dashboard ({"symbols": "EURUSD,XAUUSD"}) or go back to the environment list ({"reset": true})."""
+    import re
+
+    if body.get("reset"):
+        kv_set("symbols", None)
+        log("Symbols reset to the environment list", "warn")
+    else:
+        raw = body.get("symbols") or ""
+        syms = list(dict.fromkeys(s.strip().upper() for s in (raw if isinstance(raw, str) else ",".join(raw)).replace(";", ",").replace(" ", ",").split(",") if s.strip()))
+        bad = [s for s in syms if not re.fullmatch(r"[A-Z0-9]{6,12}", s)]
+        if not syms or bad or len(syms) > 30:
+            raise HTTPException(400, "Give 1 to 30 symbols such as EURUSD, comma separated" + (f" (not valid: {', '.join(bad)})" if bad else ""))
+        kv_set("symbols", syms)
+        log(f"Symbols set from the dashboard: {', '.join(syms)}", "warn")
+    return {"symbols": get_settings().symbol_list}
 
 
 @app.post("/api/allow-live")

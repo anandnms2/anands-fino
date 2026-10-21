@@ -22,9 +22,9 @@ class Feed:
         self.extra: dict[str, list[tuple]] = {}
         self.base = {"EURUSD": 1.1650, "XAUUSD": 4100.0, "XAGUSD": 50.0, "GBPUSD": 1.34, "USDJPY": 155.0, "EURJPY": 180.0}
 
-    def __call__(self, symbol):
+    def __call__(self, symbol, tf=60):
         now_h = int(time.time() // 3600) * 3600
-        b = self.base[symbol]
+        b = self.base.get(symbol, 1.2)
         rows = []
         for k in range(300):
             px = b * (1 + 0.0003 * ((k * 7) % 11 - 5) / 5 + 0.00002 * k)
@@ -58,7 +58,7 @@ def test_rates_tick_and_symbol_info(pb):
     df = pb.rates("EURUSD", 200)
     assert len(df) == 200 and list(df.columns) == brk.RATE_COLS and str(df["time"].dt.tz) == "UTC"
     t = pb.tick("EURUSD")
-    assert t["ask"] > t["bid"] and (t["ask"] - t["bid"]) == pytest.approx(0.00012)
+    assert t["ask"] > t["bid"] and (t["ask"] - t["bid"]) == pytest.approx(0.00007)
     g = pb.symbol_info("XAUUSD")
     assert g["trade_contract_size"] == 100.0 and g["digits"] == 2 and g["currency_profit"] == "USD"
     assert pb.account()["trade_mode"] == 0 and pb.account()["balance"] == 10000.0
@@ -158,3 +158,31 @@ def test_yen_pair_profit_is_converted_to_usd(pb):
     p = pb._state()["positions"][str(r["order"])]
     one_yen = pb._pnl({**p, "price_open": 155.0}, 156.0)   # +1.00 yen on 0.10 lot = 10,000 yen
     assert one_yen == pytest.approx(10000 / ((pb.tick("USDJPY")["bid"] + pb.tick("USDJPY")["ask"]) / 2), rel=1e-6)
+
+
+def test_each_venue_runs_on_its_own_timeframe(feed, monkeypatch):
+    from datetime import datetime, timezone
+    from app import venues
+    from app.main import app
+
+    c = TestClient(app)
+    assert venues.due(3, datetime(2026, 10, 21, 7, 9, tzinfo=timezone.utc)) and not venues.due(3, datetime(2026, 10, 21, 7, 10, tzinfo=timezone.utc))
+    assert venues.due(60, datetime(2026, 10, 21, 8, 0, tzinfo=timezone.utc)) and not venues.due(60, datetime(2026, 10, 21, 8, 30, tzinfo=timezone.utc))
+    assert c.post("/api/venue/paper", auth=AUTH, headers=HDR, json={"tf": 7}).status_code == 400
+    assert c.post("/api/venue/paper", auth=AUTH, headers=HDR, json={"on": True, "tf": 5}).json()["tf"] == 5
+    assert c.post("/api/venue/demo", auth=AUTH, headers=HDR, json={"tf": 3}).json()["tf"] == 3
+    monkeypatch.setattr(scoring, "combine", lambda *a, **k: {"score": 55.0, "agree": 5, "available": 7, "bias": "BUY"})
+    monkeypatch.setattr(engine, "decide", lambda ctx, model=None: {"decision": "NO", "confidence": 0.2, "thesis": "", "against": "x", "invalidation": "", "main_risk": ""})
+    paper.get_paper().reset()
+    out = engine.run_cycle(force=True)
+    assert out["ok"] and any(k.startswith("M5:") for k in out["results"]) and any(k.startswith("M3:") for k in out["results"])
+    with session() as s:
+        assert {x.timeframe for x in s.scalars(select(Signal))} == {"M3", "M5"}
+    # not forced: a minute that closes neither a 3 nor a 5 minute candle does nothing
+    class FakeNow(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 21, 7, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(engine, "utcnow", lambda: datetime(2026, 10, 21, 7, 1, tzinfo=timezone.utc))
+    monkeypatch.setattr(engine, "market_open", lambda *a, **k: True)
+    assert engine.run_cycle()["note"] == "no timeframe is due"

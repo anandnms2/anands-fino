@@ -42,7 +42,7 @@ def test_cycle_on_m3_labels_signals_and_claude_cooldown(monkeypatch):
     assert len(calls) == first  # cooldown: no second question for the same symbol and direction
     with session() as s:
         assert {x.timeframe for x in s.scalars(select(Signal))} == {"M3"}
-    assert engine.state()["timeframe"] == "M3"
+    assert engine.state()["venues"]["demo"]["tf_label"] == "M3"
 
 
 def test_ctrader_period_map():

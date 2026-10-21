@@ -20,8 +20,8 @@ UA = {"User-Agent": "Mozilla/5.0 (compatible; AnandsFino/1.0)"}
 
 # Yahoo symbols to try in order (spot first, futures as a fallback; the futures price differs slightly from spot)
 YAHOO = {"XAUUSD": ["XAUUSD=X", "GC=F"], "XAGUSD": ["XAGUSD=X", "SI=F"]}
-DEFAULT_SPREAD = {"XAUUSD": 0.30, "XAGUSD": 0.03, "USDJPY": 0.012, "EURJPY": 0.018, "GBPJPY": 0.028, "AUDJPY": 0.022,
-                  "EURGBP": 0.00015, "USDCHF": 0.00016, "USDCAD": 0.00018}  # price units; other pairs use 0.00012
+DEFAULT_SPREAD = {"XAUUSD": 0.25, "XAGUSD": 0.03, "USDJPY": 0.008, "EURJPY": 0.012, "GBPJPY": 0.020, "AUDJPY": 0.016,
+                  "EURGBP": 0.00010, "USDCHF": 0.00010, "USDCAD": 0.00012, "EURUSD": 0.00007, "GBPUSD": 0.00009}  # price units; other pairs use 0.00010. Override with PAPER_SPREADS
 CONTRACT = {"XAUUSD": 100.0, "XAGUSD": 5000.0}
 DIGITS = {"XAUUSD": 2, "XAGUSD": 3}
 
@@ -36,12 +36,16 @@ def resample(df: pd.DataFrame, tf_min: int) -> pd.DataFrame:
     return out.reset_index().rename(columns={"b": "time"})
 
 
-def _yahoo(symbol: str) -> pd.DataFrame:
-    tf_min = get_settings().timeframe_min
+# Yahoo: native intervals where they exist, 1-minute data resampled for M3
+YAHOO_IV = {1: ("1m", "5d"), 3: ("1m", "5d"), 5: ("5m", "1mo"), 15: ("15m", "1mo"), 30: ("30m", "1mo"), 60: ("60m", "2mo")}
+TD_IV = {1: "1min", 3: "1min", 5: "5min", 15: "15min", 30: "30min", 60: "1h"}
+
+
+def _yahoo(symbol: str, tf_min: int) -> pd.DataFrame:
     last_err = "no data"
     for ysym in YAHOO.get(symbol, [f"{symbol}=X"]):
         try:
-            r = httpx.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}", params={"interval": "1m" if tf_min < 60 else "60m", "range": "5d" if tf_min < 60 else "2mo"},
+            r = httpx.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}", params=dict(zip(("interval", "range"), YAHOO_IV.get(tf_min, ("60m", "2mo")))),
                           headers=UA, timeout=30, follow_redirects=True)
             r.raise_for_status()
             res = r.json()["chart"]["result"][0]
@@ -50,21 +54,20 @@ def _yahoo(symbol: str) -> pd.DataFrame:
                                "tick_volume": q.get("volume") or [0] * len(res["timestamp"])})
             df = df.dropna(subset=["open", "high", "low", "close"])
             if len(df) >= 50:
-                return resample(df, tf_min) if tf_min < 60 else df
+                return resample(df, tf_min) if tf_min == 3 else df
             last_err = f"{ysym} returned only {len(df)} candles"
         except Exception as e:  # noqa: BLE001
             last_err = f"{ysym}: {type(e).__name__}: {e}"
     raise BrokerError(f"Yahoo Finance gave no usable candles for {symbol} ({last_err})")
 
 
-def _twelvedata(symbol: str) -> pd.DataFrame:
+def _twelvedata(symbol: str, tf_min: int) -> pd.DataFrame:
     key = get_settings().twelvedata_api_key
     if not key:
         raise BrokerError("TWELVEDATA_API_KEY is not set")
-    tf_min = get_settings().timeframe_min
     pair = f"{symbol[:3]}/{symbol[3:6]}"
     r = httpx.get("https://api.twelvedata.com/time_series", timeout=30,
-                  params={"symbol": pair, "interval": "1min" if tf_min < 60 else "1h", "outputsize": 5000 if tf_min < 60 else 500, "timezone": "UTC", "order": "ASC", "apikey": key})
+                  params={"symbol": pair, "interval": TD_IV.get(tf_min, "1h"), "outputsize": 5000 if tf_min in (1, 3) else 500, "timezone": "UTC", "order": "ASC", "apikey": key})
     data = r.json()
     if data.get("status") == "error" or "values" not in data:
         raise BrokerError(f"Twelve Data: {data.get('message', 'no values')} for {pair}")
@@ -75,20 +78,20 @@ def _twelvedata(symbol: str) -> pd.DataFrame:
         df[c] = df[c].astype(float)
     df["tick_volume"] = 0
     df = df[["time", "open", "high", "low", "close", "tick_volume"]]
-    return resample(df, tf_min) if tf_min < 60 else df
+    return resample(df, tf_min) if tf_min == 3 else df
 
 
-def fetch_candles(symbol: str) -> pd.DataFrame:
-    """Candles of the configured timeframe, oldest first, last row is the candle still forming. Overridden in tests."""
+def fetch_candles(symbol: str, tf_min: int = 60) -> pd.DataFrame:
+    """Candles of tf_min minutes, oldest first, last row is the candle still forming. Overridden in tests."""
     feed = get_settings().paper_feed
-    return _twelvedata(symbol) if feed == "twelvedata" else _yahoo(symbol)
+    return _twelvedata(symbol, tf_min) if feed == "twelvedata" else _yahoo(symbol, tf_min)
 
 
 # ------------------------------------------------------------------ the broker
 class PaperBroker:
     def __init__(self):
         self._lock = threading.RLock()
-        self._cache: dict[str, tuple[float, pd.DataFrame]] = {}
+        self._cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
         self.offset_s = 0
 
     # ---- feed with cache ----
@@ -98,22 +101,28 @@ class PaperBroker:
             return max(cfg.paper_price_ttl_s, len(cfg.symbol_list) * 86400 / 700)
         return cfg.paper_price_ttl_s
 
-    def _candles(self, symbol: str) -> pd.DataFrame:
+    def _tf(self) -> int:
+        from .venues import venue_tf
+
+        return venue_tf("paper")
+
+    def _candles(self, symbol: str, tf: int | None = None) -> pd.DataFrame:
+        tf = tf or self._tf()
         with self._lock:
-            hit = self._cache.get(symbol)
+            hit = self._cache.get((symbol, tf))
             if hit and time.time() - hit[0] < self._ttl():
                 return hit[1]
             try:
-                raw = fetch_candles(symbol)
+                raw = fetch_candles(symbol, tf)
             except BrokerError:
                 if hit and time.time() - hit[0] < 6 * 3600:
                     return hit[1]  # keep using the last good copy for a while
                 raise
             df = raw.copy()
-            step = get_settings().timeframe_min * 60
+            step = tf * 60
             df["time"] = (df["time"].astype("int64") // step) * step
             df = df.drop_duplicates("time", keep="last").sort_values("time").reset_index(drop=True)
-            self._cache[symbol] = (time.time(), df)
+            self._cache[(symbol, tf)] = (time.time(), df)
             return df
 
     def _spread(self, symbol: str) -> float:
@@ -121,7 +130,7 @@ class PaperBroker:
             custom = json.loads(get_settings().paper_spreads or "{}")
         except ValueError:
             custom = {}
-        return float(custom.get(symbol, DEFAULT_SPREAD.get(symbol, 0.00012)))
+        return float(custom.get(symbol, DEFAULT_SPREAD.get(symbol, 0.00010)))
 
     # ---- state ----
     def _state(self) -> dict:
@@ -154,8 +163,8 @@ class PaperBroker:
                 "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01, "currency_profit": s[3:6], "currency_base": s[:3],
                 "trade_stops_level": 0, "filling_mode": 3, "trade_mode": 4, "visible": True}
 
-    def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
-        df = self._candles(symbol.upper()).tail(count).copy()
+    def rates(self, symbol: str, count: int = 500, tf: int | None = None) -> pd.DataFrame:
+        df = self._candles(symbol.upper(), tf).tail(count).copy()
         out = pd.DataFrame({"time": pd.to_datetime(df["time"], unit="s", utc=True), "open": df["open"], "high": df["high"], "low": df["low"],
                             "close": df["close"], "tick_volume": df["tick_volume"], "spread": 0, "real_volume": 0})
         return out[RATE_COLS].reset_index(drop=True)
@@ -207,7 +216,8 @@ class PaperBroker:
             except BrokerError:
                 continue
             sp = self._spread(p["symbol"])
-            open_hour = (p["time"] // (get_settings().timeframe_min * 60)) * (get_settings().timeframe_min * 60)
+            step = self._tf() * 60
+            open_hour = (p["time"] // step) * step
             buy = p["type"] == 0
             hit = None
             for row in df[df["time"] > open_hour].itertuples():

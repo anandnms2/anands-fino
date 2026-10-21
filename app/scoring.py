@@ -89,7 +89,7 @@ def combine(factors: dict, weights: dict, threshold: float, min_agree: int, min_
     return {"score": round(comp, 2), "agree": agree, "available": len(avail), "bias": bias}
 
 
-def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: float, rr: float) -> dict:
+def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: float, rr: float, min_spreads: float = 0.0) -> dict:
     """Entry at market, stop beyond a nearby swing when one exists (1 to 2.5 ATR away), else a fixed ATR multiple."""
     a = tech["atr"]
     buy = bias == "BUY"
@@ -103,6 +103,9 @@ def build_levels(bias: str, tech: dict, tick: dict, digits: int, stop_mult: floa
         cands = [p for p in tech["swing_highs"] if 1.0 * a <= p - entry <= 2.5 * a]
         if cands:
             sl = min(cands) + 0.25 * a
+    floor = min_spreads * max(tick["ask"] - tick["bid"], 0.0)
+    if floor and abs(entry - sl) < floor:   # on fast charts the ATR stop can be thinner than the spread itself
+        sl = entry - floor if buy else entry + floor
     stop = abs(entry - sl)
     tp = entry + rr * stop if buy else entry - rr * stop
     return {"entry": round(entry, digits), "sl": round(sl, digits), "tp": round(tp, digits),

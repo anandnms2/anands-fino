@@ -40,8 +40,13 @@ A venue pauses by itself after `MAX_LOSS_STREAK` losses in a row or a 2% daily l
 
 **Initial switches** come from the environment (`PAPER_MODE`, `MODE`: `demo_auto` switches Demo on; `live_approval` / `live_auto` switch Live on with manual / auto approval when `ALLOW_LIVE=true`); after that the dashboard switches win and are stored in the database.
 
+## Candle size per venue
+Each venue card has a **Candles** selector (1, 3, 5, 15, 30 min or 1 hour). The scheduler wakes every minute and runs a venue only when a candle of its own size has just closed, so Paper can trade M1 while Demo trades M5 and Live trades H1. Venues on the same size share one analysis and one Claude answer. `TIMEFRAME_MIN` is only the starting value.
+
+**Short charts and spreads.** On M1/M3 the ATR is often smaller than the spread, which used to leave a stop thinner than the spread (blocked) and a huge lot. Three rules now handle it: the stop is never closer than `MIN_STOP_SPREADS` (12) spreads; the trade is skipped when one average candle moves less than `MIN_ATR_TO_SPREAD` (2) spreads (nothing to earn after costs); and the existing `MAX_SPREAD_TO_STOP` (10%) still applies. Paper spreads default to typical raw-account values (EURUSD 0.7 pip, gold 0.25); set `PAPER_SPREADS` to what your cTrader demo actually quotes. The Demo venue always uses the real cTrader bid/ask.
+
 ## Symbols
-Default 13: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD, EURJPY, GBPJPY, EURGBP, AUDJPY (`SYMBOLS`, comma separated; any FX pair or metal your broker lists works, use `SYMBOL_MAP` for odd broker names).
+The **Symbols** card on the dashboard overrides the `SYMBOLS` variable (Coolify keeps the value from the first deploy). Default 13: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, NZDUSD, EURJPY, GBPJPY, EURGBP, AUDJPY (`SYMBOLS`, comma separated; any FX pair or metal your broker lists works, use `SYMBOL_MAP` for odd broker names).
 - Each cycle ranks the setups by score and works through the strongest first, so the open-trade slots go to the best ones.
 - Pairs whose profit is not in USD (JPY, CHF, CAD, GBP) are sized by converting the stop distance into the account currency with the live rate; if the rate cannot be priced the trade is refused.
 - Correlation groups (one open trade per group and direction): the metals; the four dollar-short pairs (EURUSD, GBPUSD, AUDUSD, NZDUSD); the three dollar-long pairs (USDJPY, USDCHF, USDCAD); the four yen-short pairs (USDJPY and the JPY crosses).

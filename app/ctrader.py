@@ -396,11 +396,11 @@ class CTraderBroker:
             time.sleep(0.1)
         raise BrokerError(f"no price received for {symbol}")
 
-    def rates(self, symbol: str, count: int = 500) -> pd.DataFrame:
+    def rates(self, symbol: str, count: int = 500, tf: int | None = None) -> pd.DataFrame:
         """Candles of the configured timeframe in UTC, oldest first. The last row is the candle still forming, as with MT5."""
         sid = int(self._light_symbol(symbol)["symbolId"])
         now_ms = int(time.time() * 1000)
-        tf = get_settings().timeframe_min
+        tf = tf or get_settings().timeframe_min
         if tf not in PERIODS:
             raise BrokerError(f"TIMEFRAME_MIN {tf} is not a cTrader candle size. Use one of {sorted(PERIODS)}")
         span_ms = int(count * 1.8 * tf * 60 * 1000) + 3 * 24 * 3600 * 1000  # allows for weekends
