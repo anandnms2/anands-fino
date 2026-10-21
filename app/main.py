@@ -279,6 +279,17 @@ def api_venue(name: str, body: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/profile")
+def api_profile(body: dict = Body(...)):
+    from .config import PROFILES, profile_name
+    p = body.get("profile")
+    if p not in PROFILES:
+        raise HTTPException(400, "profile must be fast or normal")
+    kv_set("profile", p)
+    log(f"Trading profile: {p}" + (" (looser filters, more trades)" if p == "fast" else " (stricter filters)"), "info")
+    return {"profile": profile_name()}
+
+
 @app.post("/api/symbols")
 def api_symbols(body: dict = Body(...)):
     """Set the traded symbols from the dashboard ({"symbols": "EURUSD,XAUUSD"}) or go back to the environment list ({"reset": true})."""

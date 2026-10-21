@@ -693,5 +693,6 @@ def state() -> dict:
                   "freellm_url": bool(cfg.freellmapi_base_url)},
         "events": collectors.upcoming_events(),
         "symbols": cfg.symbol_list, "symbols_custom": bool(kv_get("symbols")), "symbols_default": [s.strip().upper() for s in cfg.symbols.split(",") if s.strip()],
+        "profile": __import__("app.config", fromlist=["x"]).profile_name(),
         "thresholds": {"score": cfg.score_threshold, "agree": cfg.min_agree, "agree_pct": cfg.min_agree_pct, "min_rr": cfg.min_rr},
     }

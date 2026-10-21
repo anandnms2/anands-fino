@@ -221,3 +221,13 @@ def test_auto_chart_climbs_when_candles_are_too_quiet(monkeypatch):
     cfg = get_settings()
     assert cfg.auto_tf and cfg.auto_tf_max == 15 and cfg.spread_stop_limit == 0.25
     get_settings.cache_clear()
+
+
+def test_profile_switch_loosens_filters():
+    from app.config import get_settings
+    from app.db import kv_set
+    kv_set("profile", "fast")
+    c = get_settings()
+    assert c.score_threshold == 20 and c.min_agree_pct == 50 and c.max_open == 5
+    kv_set("profile", "normal")
+    assert get_settings().score_threshold == 35

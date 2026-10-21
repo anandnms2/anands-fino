@@ -144,6 +144,10 @@ async function desk() {
     ${st.symbols_custom ? `<button class="btn sm" onclick="act('/api/symbols',{reset:true},'Back to the environment list')">Use environment list</button>` : ""}</div>
     <div class="mute" style="font-size:12px;margin-top:6px">Takes effect on the next cycle. The textarea starts from the built-in list.</div></div></section>`;
 
+  html += `<section class="card"><div class="hd"><h2>Trading profile</h2><span class="mono mute">${st.profile === "fast" ? "fast" : "normal"}</span></div><div class="pad">
+    <div class="mute" style="margin-bottom:10px">Fast: score ±20, 50% of factors agree, Claude re-asked after 5 min, up to 5 open trades. Normal: score ±35, 60%, 15 min, 3 open. Loss limits, news blackout, spread checks and Claude's YES/NO apply in both.</div>
+    <button class="btn sm" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn sm" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div></section>`;
+
   html += `<section class="card"><div class="hd"><h2>Kill switch</h2></div><div class="pad">
     <div class="mute" style="margin-bottom:10px">Stops every venue. A venue also pauses by itself at ${r.max_loss_streak} losses in a row or a ${r.daily_loss_cap_pct}% daily loss.</div>
     ${h.on ? "" : `<button class="btn dng" onclick="act('/api/halt',{reason:'halted from the dashboard'},'Halted')">Halt trading</button>`}

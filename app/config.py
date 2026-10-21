@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     min_atr_to_spread: float = 2.0     # skip when one average candle moves less than this many spreads (nothing to earn after costs)
     max_stop_atr: float = 3.5          # a stop wider than this many ATRs puts the target out of reach on this chart: skip
     min_stop_spreads: float = 0.0      # 0 = derived from SPREAD_STOP_LIMIT (stop at least 1.05 / that many spreads)     # the stop is never closer than this many spreads (keeps the spread check passable on fast charts)
+    profile: str = "fast"              # fast = trade often (looser filters), normal = the stricter values below; the dashboard switch overrides this
     auto_tf: bool = True               # per symbol: climb to a bigger candle when the chosen one moves less than AUTO_TF_ATR_SPREADS spreads
     auto_tf_atr_spreads: float = 3.0
     auto_tf_max: int = 15              # the biggest candle the auto chart will climb to
@@ -169,9 +170,40 @@ class Settings(BaseSettings):
         return self.symbol_map_dict.get(symbol, symbol)
 
 
+# "fast" trades often: looser entry filters and a short Claude cooldown. The loss limits, the news blackout, the stop
+# and spread cost checks, Claude's YES/NO and the Live lock are the same in both profiles.
+PROFILES = {
+    "fast": {"score_threshold": 20.0, "min_agree_pct": 50.0, "min_atr_to_spread": 1.5, "max_stop_atr": 6.0, "auto_tf_atr_spreads": 2.5,
+             "claude_cooldown_min": 5, "min_confidence": 0.55, "max_open": 5, "min_rr": 1.3},
+    "normal": {},
+}
+
+
 @lru_cache
-def get_settings() -> Settings:
+def _base() -> Settings:
     return Settings()
+
+
+def profile_name() -> str:
+    base = _base()
+    try:
+        from .db import kv_get
+
+        p = kv_get("profile")
+        if p in PROFILES:
+            return p
+    except Exception:  # noqa: BLE001  (database not ready yet)
+        pass
+    return base.profile if base.profile in PROFILES else "fast"
+
+
+def get_settings() -> Settings:
+    base = _base()
+    over = PROFILES.get(profile_name(), {})
+    return base.model_copy(update=over) if over else base
+
+
+get_settings.cache_clear = _base.cache_clear  # type: ignore[attr-defined]
 
 
 def tf_label(minutes: int | None = None) -> str:
