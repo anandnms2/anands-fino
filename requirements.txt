@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn>=0.30
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+apscheduler>=3.10,<4
+pandas>=2.2
+numpy>=1.26
+httpx>=0.27
+anthropic>=0.40
+feedparser>=6.0
+pydantic-settings>=2.4
+rpyc>=6.0
