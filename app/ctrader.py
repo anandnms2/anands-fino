@@ -427,6 +427,33 @@ class CTraderBroker:
         df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
         return df
 
+    def history(self, symbol: str, tf: int, days: int, max_pages: int = 80) -> tuple[pd.DataFrame, int]:
+        """Up to `days` days of candles, paged backwards from now (for the backtester and the depth probe). Returns (candles oldest first, requests made)."""
+        sid = int(self._light_symbol(symbol)["symbolId"])
+        if tf not in PERIODS:
+            raise BrokerError(f"{tf} is not a cTrader candle size")
+        now_ms = int(time.time() * 1000)
+        from_ms, to_ms, rows, pages = now_ms - days * 86400 * 1000, now_ms, {}, 0
+        while pages < max_pages and to_ms > from_ms:
+            res = self._call(GET_TRENDBARS_REQ, {"ctidTraderAccountId": self._ctid, "symbolId": sid, "period": PERIODS[tf], "fromTimestamp": from_ms, "toTimestamp": to_ms})
+            pages += 1
+            got = res.get("trendbar") or []
+            for b in got:
+                low = int(b["low"])
+                t = int(b["utcTimestampInMinutes"]) * 60
+                rows[t] = [t, (low + int(b.get("deltaOpen", 0))) / PRICE_SCALE, (low + int(b.get("deltaHigh", 0))) / PRICE_SCALE, low / PRICE_SCALE,
+                           (low + int(b.get("deltaClose", 0))) / PRICE_SCALE, int(b.get("volume", 0))]
+            if not got:
+                break
+            earliest = min(int(b["utcTimestampInMinutes"]) for b in got) * 60000
+            if not res.get("hasMore") and earliest <= from_ms + tf * 60000:
+                break
+            if earliest - 1 >= to_ms:
+                break
+            to_ms = earliest - 1
+        df = pd.DataFrame([rows[k] for k in sorted(rows)], columns=["time", "open", "high", "low", "close", "volume"])
+        return df, pages
+
     def detect_offset_s(self, symbol: str, now: datetime | None = None) -> int | None:
         return 0
 

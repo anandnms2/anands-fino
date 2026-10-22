@@ -174,3 +174,9 @@ def test_engine_cycle_reconcile_and_close_on_ctrader(fake, monkeypatch):
         assert closed.status == "closed" and closed.profit == pytest.approx(25.0 - 3.5 - 3.5 - 0.1)
     b._drop()
     brk.set_broker(brk.MockBroker())
+
+
+def test_history_pages_back_and_returns_sorted_candles(broker):
+    df, pages = broker.history("EURUSD", 60, 3)
+    assert pages >= 1 and len(df) > 10 and list(df.columns) == ["time", "open", "high", "low", "close", "volume"]
+    assert df["time"].is_monotonic_increasing and df["time"].is_unique

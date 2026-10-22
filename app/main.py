@@ -633,6 +633,32 @@ def api_close(venue: str, ticket: int):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/history-probe")
+def api_history_probe(symbol: str = "EURUSD", venue: str = "demo", days: int = 400):
+    """Read-only: how much candle history does the cTrader account give for each candle size? (earliest candle, count, requests, seconds)"""
+    cfg = get_settings()
+    if venue not in venues.VENUES or symbol.upper() not in cfg.symbol_list:
+        raise HTTPException(400, "unknown venue or symbol")
+    broker = get_broker(venue)
+    if not hasattr(broker, "history"):
+        raise HTTPException(400, "this broker has no history call")
+    out = {"venue": venue, "symbol": symbol.upper(), "asked_days": days, "rows": []}
+    try:
+        broker.connect()
+    except BrokerError as e:
+        raise HTTPException(502, str(e)) from e
+    for tf in (60, 30, 15, 5, 1):
+        t0 = time.time()
+        try:
+            df, pages = broker.history(cfg.broker_symbol(symbol.upper()), tf, min(days, 400 if tf >= 15 else 150), max_pages=40)
+            first = int(df["time"].iloc[0]) if len(df) else None
+            out["rows"].append({"tf": tf, "candles": len(df), "requests": pages, "earliest": iso(__import__("datetime").datetime.fromtimestamp(first, __import__("datetime").timezone.utc)) if first else None,
+                                "days_covered": round((time.time() - first) / 86400, 1) if first else 0, "seconds": round(time.time() - t0, 1)})
+        except BrokerError as e:
+            out["rows"].append({"tf": tf, "error": str(e), "seconds": round(time.time() - t0, 1)})
+    return out
+
+
 @app.get("/api/diagnostics")
 def api_diagnostics(venue: str = ""):
     """Read-only check of a venue's connection, symbol names and data feeds. Run this first after deploying."""
