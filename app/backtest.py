@@ -213,7 +213,7 @@ _run = {"lock": threading.Lock()}
 def needs_run() -> bool:
     """True when there is no finished test of the current rules, or the last one is over 3 days old."""
     st = status()
-    if st.get("state") != "done" or st.get("version") != RULES_VERSION:
+    if st.get("state") != "done" or st.get("version") != RULES_VERSION:   # includes "interrupted": a run cut short resumes from the start
         return True
     try:
         from datetime import datetime, timezone
@@ -223,7 +223,23 @@ def needs_run() -> bool:
 
 
 def status() -> dict:
-    return kv_get("backtest") or {"state": "never run", "rows": []}
+    st = kv_get("backtest") or {"state": "never run", "rows": []}
+    if st.get("state") == "running" and not _run["lock"].locked():
+        st = {**st, "state": "interrupted"}      # the saved state says running but no worker is alive (restart or crash): show it honestly and let it resume
+    return st
+
+
+def _save(key: str, value) -> None:
+    """Write progress to the database, retrying: a locked database must never kill the worker and freeze the page at its last number."""
+    for k in range(4):
+        try:
+            kv_set(key, value)
+            return
+        except Exception as e:  # noqa: BLE001
+            if k == 3:
+                log(f"Backtest could not save progress ({type(e).__name__}: {e})", "warn")
+                return
+            time.sleep(0.5 * (k + 1))
 
 
 def run_all() -> bool:
@@ -235,23 +251,33 @@ def run_all() -> bool:
         try:
             cfg = get_settings()
             jobs = [(s, tf) for s in cfg.symbol_list for tf in TIMEFRAMES]
-            state = {"state": "running", "version": RULES_VERSION, "started": utcnow().isoformat(), "total": len(jobs), "done": 0, "rows": [], "errors": []}
-            kv_set("backtest", state)
+            state = {"state": "running", "version": RULES_VERSION, "started": utcnow().isoformat(), "total": len(jobs), "done": 0, "rows": [], "errors": [], "current": "", "stage": ""}
+            _save("backtest", state)
             for s, tf in jobs:
+                t0 = time.time()
+                state["current"], state["stage"], state["beat"] = f"{s} {tf}m", "fetching candles", utcnow().isoformat()
+                _save("backtest", state)
                 try:
-                    state["rows"].append(test_symbol(s, tf))
+                    df = fetch_history(s, tf)
+                    state["stage"], state["beat"] = f"testing {len(df)} candles", utcnow().isoformat()
+                    _save("backtest", state)
+                    row = test_symbol(s, tf, df)
+                    row["secs"] = round(time.time() - t0, 1)
+                    state["rows"].append(row)
                 except Exception as e:  # noqa: BLE001
                     state["errors"].append(f"{s} {tf}m: {e}")
+                    log(f"Backtest {s} {tf}m skipped: {e}", "warn")
                 state["done"] += 1
-                kv_set("backtest", state)
-                time.sleep(0.5)
-            state["state"], state["finished"] = "done", utcnow().isoformat()
+                _save("backtest", state)
+                time.sleep(0.2)
+            state["state"], state["finished"], state["current"], state["stage"] = "done", utcnow().isoformat(), "", ""
             state["chosen"] = choose(state["rows"])
-            kv_set("backtest", state)
-            kv_set("strategies", state["chosen"])
+            _save("backtest", state)
+            _save("strategies", state["chosen"])
             log(f"Backtest finished: {len(state['chosen'])} of {len(cfg.symbol_list)} symbols have a setup that also earned on unseen data", "info")
         except Exception as e:  # noqa: BLE001
-            kv_set("backtest", {"state": "failed", "error": str(e), "rows": []})
+            log(f"Backtest stopped: {type(e).__name__}: {e}", "error")
+            _save("backtest", {"state": "failed", "error": f"{type(e).__name__}: {e}", "rows": []})
         finally:
             _run["lock"].release()
 

@@ -117,3 +117,21 @@ def test_history_comes_from_ctrader_first_and_falls_back_to_yahoo(monkeypatch):
     monkeypatch.setattr(brk, "get_broker", lambda venue="demo": Short())
     monkeypatch.setattr(backtest, "fetch_yahoo", lambda s, tf: _fake_candles(200, tf))
     assert backtest.fetch_history("EURUSD", 60).attrs["source"] == "yahoo"
+
+
+def test_a_dead_run_is_reported_as_interrupted_and_progress_saves_survive_a_locked_db(monkeypatch):
+    from app.db import kv_set
+
+    kv_set("backtest", {"state": "running", "version": backtest.RULES_VERSION, "done": 9, "total": 78, "rows": []})
+    assert backtest.status()["state"] == "interrupted" and backtest.needs_run()
+    calls = []
+
+    def flaky(k, v):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(backtest, "kv_set", flaky)
+    monkeypatch.setattr(backtest.time, "sleep", lambda s: None)
+    backtest._save("backtest", {"state": "running"})
+    assert len(calls) == 3

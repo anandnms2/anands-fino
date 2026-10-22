@@ -693,7 +693,9 @@ async function strategiesPage() {
   const sel = (LAB && by[LAB[0]] && by[LAB[0]][LAB[1]]) || rows.find((r) => r.ok) || rows[0];
   const tot = rows.length, kp = (l, v, sub, c) => `<div class="lkpi"><span>${l}</span><b class="mono ${c || ""}">${v}</b><i>${sub}</i></div>`;
   let h = pageHead("Strategy Lab", fin ? `Last full test ${hm(d.finished)} · next in ${nextH != null && nextH > 0 ? nextH + " h" : "due"} · ${R.n_strategies || 10} strategies × ${syms.length} symbols × ${tfs.length} candle sizes` : "No test has finished yet",
-    `<button class="btn pri" ${run ? "disabled" : ""} onclick="act('/api/backtest/run',{},'Backtest started')">${run ? "Running " + d.done + "/" + d.total : "Run backtest now"}</button>`);
+    `<button class="btn pri" ${run ? "disabled" : ""} onclick="act('/api/backtest/run',{},'Backtest started')">${run ? "Running " + d.done + "/" + d.total : d.state === "interrupted" ? "Restart backtest" : "Run backtest now"}</button>`);
+  if (run && d.current) h += `<div class="note" style="margin:0">Now: <b class="mono">${esc(d.current)}</b> · ${esc(d.stage || "")} · ${d.done} of ${d.total} done${d.beat ? " · updated " + hm(d.beat) : ""}</div>`;
+  if (d.state === "interrupted") h += `<div class="banner warn"><strong>The last run stopped at ${d.done} of ${d.total}.</strong><span class="mute">The server restarted or the worker died. It restarts by itself within 10 minutes, or press Restart backtest.</span></div>`;
   h += `<div class="lkpis">${kp("PROVEN SETUPS", nProven, "of " + tot + " tests", nProven ? "ok" : "")}${kp("STRATEGIES TESTED", R.n_strategies || 10, "plus the old score entries for comparison")}${kp("HISTORY", days + " days", nCt ? nCt + " of " + tot + " tests on cTrader candles" : "Yahoo candles")}${kp("STATE", esc(d.state), d.error ? esc(d.error) : (d.errors && d.errors.length ? d.errors.length + " tests skipped" : "re-tests every 2 days"), run ? "acc" : "")}</div>`;
   const cell = (r) => {
     if (!r) return `<div class="hc na">–</div>`;
