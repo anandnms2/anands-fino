@@ -443,8 +443,8 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
 
 
 def proven_only() -> bool:
-    """Off unless switched on: symbols with no proven setup do not trade at all (otherwise they trade on the score rules, marked UNPROVEN)."""
-    return kv_get("proven_only") is True
+    """On unless switched off: a symbol with no setup proven on past data does not trade (off lets it trade on the score rules, marked UNPROVEN)."""
+    return kv_get("proven_only") is not False
 
 
 def strategy_mode() -> bool:

@@ -35,6 +35,7 @@ def fresh_db():
 
     engine._strat_sig.clear()
     db.kv_set("strategy_mode", False)   # the older tests exercise the score-only entries; strategy mode has its own tests
+    db.kv_set("proven_only", False)   # the older tests exercise unproven trading; the proven-only default has its own test
     db.kv_set("claude_veto", True)   # the older tests exercise Claude's veto; its switch has its own test
     collectors.save_snapshot("calendar", [])  # a loaded, empty calendar: no events, so no blackout
     yield

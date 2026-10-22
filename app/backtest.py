@@ -13,6 +13,7 @@ from .config import get_settings
 from .db import kv_get, kv_set, log, utcnow
 from .paper import UA, YAHOO, paper_spec
 
+RULES_VERSION = 4               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
 TIMEFRAMES = (1, 3, 5, 15, 30, 60)   # minutes. Yahoo keeps about 30 days of 1m (3m is built from it), 60 days of 5m/15m/30m and 2 years of 1h
 # days of history a test must cover before it can prove anything: short windows are allowed for the fast candles, hourly must cover 6 months
@@ -161,6 +162,18 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
 _run = {"lock": threading.Lock()}
 
 
+def needs_run() -> bool:
+    """True when there is no finished test of the current rules, or the last one is over 3 days old."""
+    st = status()
+    if st.get("state") != "done" or st.get("version") != RULES_VERSION:
+        return True
+    try:
+        from datetime import datetime, timezone
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(st["finished"])).days >= 3
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def status() -> dict:
     return kv_get("backtest") or {"state": "never run", "rows": []}
 
@@ -174,7 +187,7 @@ def run_all() -> bool:
         try:
             cfg = get_settings()
             jobs = [(s, tf) for s in cfg.symbol_list for tf in TIMEFRAMES]
-            state = {"state": "running", "started": utcnow().isoformat(), "total": len(jobs), "done": 0, "rows": [], "errors": []}
+            state = {"state": "running", "version": RULES_VERSION, "started": utcnow().isoformat(), "total": len(jobs), "done": 0, "rows": [], "errors": []}
             kv_set("backtest", state)
             for s, tf in jobs:
                 try:

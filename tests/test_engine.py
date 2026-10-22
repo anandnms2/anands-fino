@@ -305,3 +305,18 @@ def test_proven_only_toggle_blocks_unproven_symbols(monkeypatch):
         assert brk.get_broker("demo").orders                 # switched off: they trade again on the score rules
     finally:
         kv_set("proven_only", False)
+
+
+def test_proven_only_is_on_by_default_and_the_server_retests_by_itself():
+    from app import backtest
+    from app.db import kv_set
+
+    kv_set("proven_only", None)
+    assert engine.proven_only() is True and engine.strategy_mode() is True
+    kv_set("backtest", {"state": "done", "version": backtest.RULES_VERSION, "finished": engine.utcnow().isoformat(), "rows": []})
+    assert backtest.needs_run() is False
+    kv_set("backtest", {"state": "done", "version": backtest.RULES_VERSION - 1, "finished": engine.utcnow().isoformat(), "rows": []})
+    assert backtest.needs_run() is True                      # new rules: re-test at the next start
+    kv_set("backtest", {"state": "done", "version": backtest.RULES_VERSION, "finished": "2020-01-01T00:00:00+00:00", "rows": []})
+    assert backtest.needs_run() is True                      # stale results
+    kv_set("proven_only", False)

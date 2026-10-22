@@ -56,8 +56,8 @@ async def lifespan(app: FastAPI):
         from . import backtest
         from datetime import datetime as _dt, timedelta as _td
 
-        scheduler.add_job(backtest.run_all, "interval", days=7, id="backtest_weekly", replace_existing=True)
-        if backtest.status().get("state") in ("never run", "running", "failed"):   # first start, or a run cut short by a restart
+        scheduler.add_job(backtest.run_all, "interval", days=2, id="backtest_regular", replace_existing=True)   # re-test on fresh data every 2 days
+        if backtest.needs_run():   # first start, a run cut short by a restart, new rules, or results older than 3 days
             scheduler.add_job(backtest.run_all, "date", run_date=_dt.now() + _td(seconds=45), id="backtest_first", replace_existing=True)
         scheduler.start()
         from .paper import start_quotes
