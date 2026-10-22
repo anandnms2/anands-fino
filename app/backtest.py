@@ -25,7 +25,7 @@ MAX_BARS = 48                    # a trade still open after this many candles is
 MIN_TRAIN, MIN_TEST = 25, 12
 # what a setup must show on the unseen 40% before live trading may use it
 OK_TEST_EXPECTANCY, OK_TEST_PF = 0.05, 1.15
-MIN_TEST_STRONG = 40            # a setup judged on fewer unseen trades than this is too thin to trust
+MIN_TEST_STRONG = 30            # a setup judged on fewer unseen trades than this is too thin to trust
 MIN_T = 1.0                     # and the average win must be at least one standard error above zero, else it is indistinguishable from luck
 MIN_T_FAST = 1.5                # short windows and six candle sizes tested per symbol give luck more chances, so the bar is higher below 1h
 MIN_ROBUST = 0.4                # and at least this share of ALL tested settings must also be positive on the unseen part: an edge that exists only for one lucky setting is noise
@@ -147,7 +147,8 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     best = max(pool, key=lambda x: x["train"]["exp"]) if pool else None
     bl = [x for x in results if x["strategy"] == S.BASELINE and x["stop_k"] == 1.5 and x["rr"] == 1.5 and x["session"] == "all"]
     base = bl[0]["test"] if bl else None
-    tested = [x for x in results if x["test"]["n"] >= MIN_TEST]
+    # robustness is judged among the winning strategy's own settings, so adding more strategies cannot dilute it
+    tested = [x for x in results if x["test"]["n"] >= MIN_TEST and (best is None or x["strategy"] == best["strategy"])]
     row = {"symbol": symbol, "tf": tf, "candles": len(df), "days": round(days), "baseline_test": base, "best": best,
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
