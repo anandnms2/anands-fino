@@ -25,7 +25,7 @@ MAX_BARS = 48                    # a trade still open after this many candles is
 MIN_TRAIN, MIN_TEST = 25, 12
 # what a setup must show on the unseen 40% before live trading may use it
 OK_TEST_EXPECTANCY, OK_TEST_PF = 0.05, 1.15
-MIN_TEST_STRONG = 30            # a setup judged on fewer unseen trades than this is too thin to trust
+MIN_TEST_STRONG = 40            # a setup judged on fewer unseen trades than this is too thin to trust
 MIN_T = 1.0                     # and the average win must be at least one standard error above zero, else it is indistinguishable from luck
 MIN_T_FAST = 1.5                # short windows and six candle sizes tested per symbol give luck more chances, so the bar is higher below 1h
 MIN_ROBUST = 0.4                # and at least this share of ALL tested settings must also be positive on the unseen part: an edge that exists only for one lucky setting is noise
@@ -205,6 +205,6 @@ def choose(rows: list[dict]) -> dict:
             continue
         b, t = r["best"], r["best"]["test"]
         cur = best.get(r["symbol"])
-        if cur is None or t["exp"] > cur["test"]["exp"]:
+        if cur is None or t.get("t", 0) > cur["test"].get("t", 0):   # ranked by how unlikely luck is, not by the biggest average
             best[r["symbol"]] = {"tf": r["tf"], "strategy": b["strategy"], "session": b["session"], "stop_k": b["stop_k"], "rr": b["rr"], "train": b["train"], "test": t}
     return best
