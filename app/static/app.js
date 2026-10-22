@@ -32,8 +32,8 @@ window.act = act;
 window.saveRisk = () => { const b = {}; ["risk_per_trade_pct", "daily_loss_cap_pct", "max_open", "max_loss_streak", "min_rr"].forEach((k) => { const el = document.getElementById("rk_" + k); if (el) b[k] = Number(el.value); }); act("/api/risk", b, "Risk limits saved"); };
 window.askAct = (msg, path, ok) => { if (confirm(msg)) act(path, {}, ok); };
 
-const VLABEL = { paper: "Paper", demo: "Demo", live: "Live" };
-const VDESC = { paper: "Simulated account on real prices. No broker needed.", demo: "cTrader demo account with demo funds.", live: "cTrader live account. Real money." };
+const VLABEL = { demo: "Demo", live: "Live" };
+const VDESC = { demo: "cTrader demo account with demo funds.", live: "cTrader live account. Real money." };
 const vPill = (v) => v ? `<span class="pill ${v === "live" ? "warn" : "acc"}">${esc(VLABEL[v] || v)}</span>` : "";
 const sw = (on, label, path, body) => `<button class="btn sm ${on ? "pri" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" onclick="act('${path}',${body},'${esc(label)} ${on ? "off" : "on"}')">${on ? "ON" : "OFF"}</button>`;
 const STATUS = {
@@ -53,7 +53,7 @@ function scoreBar(score) {
 
 /* ------------------------------------------------------------ live state (terminal) */
 const $bar = document.getElementById("bar");
-const S = { an: {}, venue: localStorage.getItem("fv") || "paper", sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
+const S = { an: {}, venue: (["demo", "live"].includes(localStorage.getItem("fv")) ? localStorage.getItem("fv") : "demo"), sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
   st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
 const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
 const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
@@ -239,7 +239,7 @@ async function loadCandles() {
 function updateLiveCandle() {
   const p = (S.px[S.venue] || {})[S.sym], c = S.candles; if (!p || !c.length) return;
   const mid = (p[0] + p[1]) / 2, last = c[c.length - 1], now = Date.now() / 1000;
-  if (S.venue !== "paper" && now >= last[0] + S.tf * 60) c.push([Math.floor(now / (S.tf * 60)) * S.tf * 60, mid, mid, mid, mid]);
+  if (now >= last[0] + S.tf * 60) c.push([Math.floor(now / (S.tf * 60)) * S.tf * 60, mid, mid, mid, mid]);
   else { last[4] = mid; last[2] = Math.max(last[2], mid); last[3] = Math.min(last[3], mid); }
   if (c.length > 400) c.shift();
 }
@@ -457,12 +457,12 @@ async function settings() {
   const kv = (a, b) => `<div class="kv"><span>${a}</span><span class="mono">${b}</span></div>`;
   const feed = (n, ok, extra) => `<div class="kv"><span><span class="dot ${ok ? "g" : "r"}"></span>${n}</span><span class="mono mute">${extra}</span></div>`;
   $app.innerHTML = `<div class="set"><nav class="rail" aria-label="Settings sections"><span class="lab">SETTINGS</span>${rail.map(([id, l]) => `<a href="#/settings" onclick="document.getElementById('s-${id}').scrollIntoView({behavior:'smooth'});return false">${l}</a>`).join("")}</nav><div class="setc">
-    <section class="card sec" id="s-venues"><h2>Trading venues</h2><p class="mute">Three venues run side by side, each on its own candle size. Every switch takes effect on the next cycle.</p><div class="vgrid">${V.map((v) => `<div class="vcard"><div class="vh"><b>${esc(v.label)}</b><span class="pill ${v.name === "live" ? "warn" : v.connected === false ? "red" : "none"}">${v.locked ? "LOCKED" : v.connected === false ? "NOT CONNECTED" : v.name === "paper" ? "SIMULATED" : v.account && v.account.demo ? "DEMO" : "CONNECTED"}</span></div>
+    <section class="card sec" id="s-venues"><h2>Trading venues</h2><p class="mute">Two venues, Demo and Live, run side by side, each on its own candle size. Every switch takes effect on the next cycle.</p><div class="vgrid">${V.map((v) => `<div class="vcard"><div class="vh"><b>${esc(v.label)}</b><span class="pill ${v.name === "live" ? "warn" : v.connected === false ? "red" : "none"}">${v.locked ? "LOCKED" : v.connected === false ? "NOT CONNECTED" : v.account && v.account.demo ? "DEMO" : "CONNECTED"}</span></div>
       <div class="mute" style="font-size:12px">${esc(VDESC[v.name])}</div>
       <div class="krow"><span>Trade</span>${v.locked ? `<button class="btn sm" onclick="if(confirm('Unlock LIVE trading? Real money on a real account. Live stays OFF until you switch it on.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock</button>` : swBtn(v.on, v.label + " venue", "/api/venue/" + v.name, `{on:${!v.on}}`, v.name === "live" && !v.on ? "Switch LIVE trading on? Real money on a real account." : "")}</div>
       <div class="krow"><span>Auto-approve</span>${v.locked ? "" : swBtn(v.auto, v.label + " auto-approve", "/api/venue/" + v.name, `{auto:${!v.auto}}`, v.name === "live" && !v.auto ? "Auto-approve LIVE trades? Orders will go out without your click." : "")}</div>
       <div class="krow"><span>Chart candles</span><select aria-label="${esc(v.label)} candle size" onchange="act('/api/venue/${v.name}',{tf:Number(this.value)},'${esc(v.label)} candles set')">${st.timeframes.map((m) => `<option value="${m}" ${m === v.tf ? "selected" : ""}>${m === 60 ? "1 hour" : m + " min"}</option>`).join("")}</select></div>
-      ${v.name === "paper" ? `<div class="krow"><span>Balance (USD)</span><span><input id="pbal" class="mono" type="number" min="100" step="100" value="${v.account ? Math.round(v.account.balance * 100) / 100 : 10000}" aria-label="Paper balance" style="width:120px;text-align:right"> <button class="btn sm pri" onclick="act('/api/paper/balance',{balance:Number($('pbal').value)},'Paper balance set')">Set</button></span></div><button class="btn sm" onclick="askAct('Reset the paper account? Balance returns to your set amount and ALL paper trade history (trades, signals, journal) is deleted. This cannot be undone.','/api/paper/reset','Paper account reset')">Reset account…</button>` : v.name !== "paper" && v.connected === false ? `<a class="btn sm" href="/ctrader/connect">Connect cTrader</a>` : ""}</div>`).join("")}</div></section>
+      ${v.connected === false ? `<a class="btn sm" href="/ctrader/connect">Connect cTrader</a>` : ""}</div>`).join("")}</div></section>
     <section class="card sec" id="s-profile"><h2>Trading profile and entry rules</h2><p class="mute">Fast takes more trades with looser filters; Normal is stricter. Pick a profile, then change any number below by hand. Your values stay when you switch profile, and each shows the profile value beside it so you can go back (↺).</p>
       <div class="seg0"><button class="btn ${fast ? "pri" : ""}" onclick="act('/api/profile',{profile:'fast'},'Fast profile')">Fast</button> <button class="btn ${fast ? "" : "pri"}" onclick="act('/api/profile',{profile:'normal'},'Normal profile')">Normal</button></div>
       <h3 class="sub">Entry rules</h3>${tuneRows("entry")}${tuneBar("entry")}
@@ -486,7 +486,7 @@ async function settings() {
     <section class="card sec danger" id="s-danger"><h2>Danger zone</h2><p class="mute">Live trading uses real money and stays locked until you unlock it.</p><div style="display:flex;flex-wrap:wrap;gap:10px">
       ${st.halted && st.halted.on ? `<button class="btn" onclick="act('/api/resume',{},'Resumed')">Resume trading</button>` : `<button class="btn dng" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">Halt all trading</button>`}
       ${st.allow_live ? `<button class="btn" onclick="act('/api/allow-live',{on:false},'Live locked')">Lock Live</button>` : `<button class="btn" onclick="if(confirm('Unlock LIVE trading? Real money on a real account.'))act('/api/allow-live',{on:true},'Live unlocked')">Unlock Live…</button>`}
-      <button class="btn" onclick="if(confirm('Drop every value you set by hand and return to the profile values?'))act('/api/tune',{reset:true},'All rules back to the profile')">Reset all rules to profile…</button> <button class="btn" onclick="askAct('Reset the paper account? Balance returns to your set amount and ALL paper trade history (trades, signals, journal) is deleted. This cannot be undone.','/api/paper/reset','Paper account reset')">Reset Paper account…</button></div></section>
+      <button class="btn" onclick="if(confirm('Drop every value you set by hand and return to the profile values?'))act('/api/tune',{reset:true},'All rules back to the profile')">Reset all rules to profile…</button></div></section>
   </div></div>`;
 }
 
@@ -558,7 +558,7 @@ let curPath = "";
 async function reports() {
   curPath = "/api/report?days=" + repDays;
   const r = await cget(curPath);
-  let html = pageHead("Trading reports", "Paper · Demo · Live, closed trades after commission and swap", `<span class="seg" style="padding:0">${[[0, "All time"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) => `<button aria-pressed="${repDays === d}" onclick="repDays=${d};render()">${l}</button>`).join("")}</span>`);
+  let html = pageHead("Trading reports", "Demo · Live, closed trades after commission and swap", `<span class="seg" style="padding:0">${[[0, "All time"], [1, "Today"], [7, "7 days"], [30, "30 days"]].map(([d, l]) => `<button aria-pressed="${repDays === d}" onclick="repDays=${d};render()">${l}</button>`).join("")}</span>`);
   const tot = Object.values(r.venues);
   html += `<section class="card strip">${Object.entries(r.venues).map(([v, s]) => `<div><div class="lab">${esc(VLABEL[v])} net P/L</div>
     <div class="v ${s.net < 0 ? "bad" : s.net > 0 ? "ok" : ""}">${money(s.net)}</div>
@@ -580,32 +580,20 @@ async function reports() {
 }
 
 /* ------------------------------------------------------------ contract specs */
-let specVenue = "paper";
-window.saveSpec = async (sym) => {
-  const g = (k) => document.getElementById(k + "_" + sym).value;
-  try { await api("/api/paper/spec/" + sym, "POST", { spread: g("sp"), contract: g("ct"), digits: g("dg"), volume_min: g("vm"), volume_step: g("vs") }); toast(sym + " saved"); } catch (e) { toast(e.message, true); }
-  render();
-};
+let specVenue = "demo";
 async function specs() {
   curPath = "/api/specs?venue=" + specVenue;
   const r = await cget(curPath);
-  let html = pageHead("Contract specifications", "What each venue's broker says a lot is, and what it costs to trade", `<span class="seg" style="padding:0">${["paper", "demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>`);
-  html += `<p class="mute" style="margin:0">${r.editable ? "Paper is a simulation, so you set the spread and contract here. Demo and Live show exactly what your cTrader account reports, read-only." : "Read from the cTrader account itself: contract size, digits, lot limits and the live spread are the broker's own, so metals, yen pairs and any non-standard symbol are sized from these numbers."}</p>`;
+  let html = pageHead("Contract specifications", "What each venue's broker says a lot is, and what it costs to trade", `<span class="seg" style="padding:0">${["demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>`);
+  html += `<p class="mute" style="margin:0">${"Read from the cTrader account itself: contract size, digits, lot limits and the live spread are the broker's own, so metals, yen pairs and any non-standard symbol are sized from these numbers."}</p>`;
   if (r.error) html += `<div class="banner warn"><strong>${esc(VLABEL[specVenue])} not reachable.</strong><span class="mute">${esc(r.error)}</span></div>`;
   const inp = (id, sym, v, w) => `<input id="${id}_${sym}" value="${esc(v)}" style="width:${w}px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:12px var(--font-mono)">`;
-  html += `<section class="card"><div class="tw"><table style="min-width:900px"><thead><tr><th>Symbol</th><th>Digits</th><th>Units per lot</th><th>Lot min / step</th><th>P/L in</th><th>Spread (price)</th><th>Points</th><th>Cost per lot</th><th>Bid / Ask</th>${r.editable ? "<th></th>" : ""}</tr></thead><tbody>`;
+  html += `<section class="card"><div class="tw"><table style="min-width:900px"><thead><tr><th>Symbol</th><th>Digits</th><th>Units per lot</th><th>Lot min / step</th><th>P/L in</th><th>Spread (price)</th><th>Points</th><th>Cost per lot</th><th>Bid / Ask</th></tr></thead><tbody>`;
   for (const x of r.rows) {
-    if (!x.ok) { html += `<tr><td><strong>${esc(x.symbol)}</strong></td><td colspan="9" class="mute">${esc(x.error || "no data")}</td></tr>`; continue; }
-    if (r.editable) {
-      html += `<tr><td><strong>${esc(x.symbol)}</strong>${x.custom ? ' <span class="pill acc">custom</span>' : ""}</td><td>${inp("dg", x.symbol, x.digits, 44)}</td><td>${inp("ct", x.symbol, x.contract, 90)}</td>
-        <td>${inp("vm", x.symbol, x.volume_min, 56)} / ${inp("vs", x.symbol, x.volume_step, 56)}</td><td class="mono">${esc(x.profit_ccy)}</td><td>${inp("sp", x.symbol, x.spread, 80)}</td>
-        <td class="mono">${x.spread_points ?? "–"}</td><td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td>
-        <td class="r"><button class="btn sm pri" onclick="saveSpec('${x.symbol}')">Save</button>${x.custom ? ` <button class="btn sm" onclick="act('/api/paper/spec/${x.symbol}',{reset:true},'Reset')">Default</button>` : ""}</td></tr>`;
-    } else {
+    if (!x.ok) { html += `<tr><td><strong>${esc(x.symbol)}</strong></td><td colspan="8" class="mute">${esc(x.error || "no data")}</td></tr>`; continue; }
       html += `<tr><td><strong>${esc(x.symbol)}</strong> <span class="mute mono" style="font-size:11px">${esc(x.broker_symbol)}</span></td><td class="mono">${x.digits}</td><td class="mono">${num(x.contract, 0)}</td>
         <td class="mono">${x.volume_min} / ${x.volume_step}</td><td class="mono">${esc(x.profit_ccy)}</td><td class="mono">${esc(x.spread)}</td><td class="mono">${x.spread_points ?? "–"}</td>
         <td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td></tr>`;
-    }
   }
   html += `</tbody></table></div></section>`;
   $app.innerHTML = html;

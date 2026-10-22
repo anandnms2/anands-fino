@@ -215,16 +215,16 @@ def _score_all(cfg: Settings, techs: dict, macro, cot, news24) -> dict:
 
 def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> dict | None:
     """One analysis pass on `tf` minute candles for the venues in `vctx`; returns {symbol: outcome}."""
-    # one set of candles for the analysis: a trading venue's broker if there is one, else demo or the paper feed
-    order = [v for v in ("demo", "live", "paper") if v in vctx] or ["demo", "paper"]
-    broker, data_is_paper = None, False
+    # one set of candles for the analysis: a trading venue's broker if there is one, else demo
+    order = [v for v in ("demo", "live") if v in vctx] or ["demo"]
+    broker = None
     for v in order:
         try:
             b = vctx[v]["broker"] if v in vctx else get_broker(v)
             b.connect()
             sync_offset(b, cfg)
             b.account()
-            broker, data_is_paper = b, (v == "paper")
+            broker = b
             break
         except BrokerError as e:
             log(f"Price source {V.LABEL[v]} unavailable: {e}", "warn")
@@ -274,7 +274,7 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
             continue   # this symbol trades on a bigger candle that has not closed yet
         last_open = closed["time"].iloc[-1]
         age_min = (utcnow() - last_open.to_pydatetime()).total_seconds() / 60
-        stale[sym] = (not force) and age_min > 4 * t + (12 if data_is_paper else 2)   # free feeds lag, metals most
+        stale[sym] = (not force) and age_min > 4 * t + 2
         techs[sym], stf[sym], dfs[sym] = tech, t, closed
         infos[sym], ticks[sym] = info, tick
         closes[sym] = [round(float(x), info["digits"]) for x in closed["close"].tail(48)]
@@ -1036,7 +1036,7 @@ def state() -> dict:
     ages = {n: collectors.snapshot_age_min(n) for n in ("macro", "cot", "calendar", "news_run")}
     return {
         "now": iso(now), "allow_live": V.allow_live(), "halted": halted(),
-        "mock": cfg.mt5_mock, "broker": cfg.broker, "paper_feed": cfg.paper_feed, "timeframes": list(V.TIMEFRAMES),
+        "mock": cfg.mt5_mock, "broker": cfg.broker, "timeframes": list(V.TIMEFRAMES),
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},

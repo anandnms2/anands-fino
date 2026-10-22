@@ -146,7 +146,6 @@ def test_live_venue_refuses_demo_account(monkeypatch):
 
 def test_one_venue_pausing_does_not_stop_the_others(monkeypatch):
     force_buy(monkeypatch); yes(monkeypatch)
-    from app import paper  # noqa: F401
     venues.set_venue("demo", on=True)
     engine.halt("test pause", "demo")
     assert venues.venue_halt("demo")["on"] and not engine.halted()["on"]

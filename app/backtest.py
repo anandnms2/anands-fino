@@ -11,7 +11,7 @@ from . import indicators as ind
 from . import strategies as S
 from .config import get_settings
 from .db import kv_get, kv_set, log, utcnow
-from .paper import UA, YAHOO, paper_spec
+from .history import UA, YAHOO, default_spec
 
 RULES_VERSION = 4               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
@@ -130,7 +130,7 @@ def stats(r: np.ndarray) -> dict:
 def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     """Every strategy and setting on this symbol and candle size: pick the best on the first 60%, judge it on the last 40%."""
     df = fetch_history(symbol, tf) if df is None else df
-    spread = float(paper_spec(symbol)["spread"])
+    spread = float(default_spec(symbol)["spread"])
     days = (float(df["time"].iloc[-1]) - float(df["time"].iloc[0])) / 86400
     need = MIN_DAYS_BY_TF.get(tf, MIN_DAYS)
     if days < need:

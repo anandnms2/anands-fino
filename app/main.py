@@ -40,6 +40,28 @@ def refresh_news():
     sentiment.tag_untagged()
 
 
+def _purge_paper() -> None:
+    """Paper trading was removed: delete its trades, signals, journal lines and settings once (demo and live history is not touched)."""
+    if kv_get("paper_removed"):
+        return
+    from sqlalchemy import delete
+
+    with session() as s:
+        ids = list(s.scalars(select(Signal.id).where(Signal.venue == "paper")))
+        s.execute(delete(Position).where(Position.venue == "paper"))
+        for k in range(0, len(ids), 500):
+            s.execute(delete(Activity).where(Activity.signal_id.in_(ids[k:k + 500])))
+        s.execute(delete(Signal).where(Signal.venue == "paper"))
+        s.commit()
+    for key in ("paper_state", "paper_start_balance", "paper_specs", "day_start:paper"):
+        kv_set(key, None)
+    v = dict(kv_get("venues") or {})
+    if v.pop("paper", None) is not None:
+        kv_set("venues", v)
+    kv_set("paper_removed", True)
+    log("Paper trading removed: its history and settings were deleted", "warn")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = get_settings()
@@ -60,8 +82,7 @@ async def lifespan(app: FastAPI):
         if backtest.needs_run():   # first start, a run cut short by a restart, new rules, or results older than 3 days
             scheduler.add_job(backtest.run_all, "date", run_date=_dt.now() + _td(seconds=45), id="backtest_first", replace_existing=True)
         scheduler.start()
-        from .paper import start_quotes
-        start_quotes()
+        _purge_paper()
         for name, fn in (("calendar", collectors.fetch_calendar), ("macro", collectors.fetch_macro),
                          ("cot", collectors.fetch_cot), ("news", refresh_news)):
             scheduler.add_job(job(name, fn), "date", run_date=None)
@@ -187,7 +208,7 @@ def api_positions():
 
 
 @app.get("/api/candles")
-def api_candles(symbol: str, tf: int = 1, venue: str = "paper", n: int = 120):
+def api_candles(symbol: str, tf: int = 1, venue: str = "demo", n: int = 120):
     """Recent candles [time, open, high, low, close] (the last one is still forming) for the terminal chart."""
     cfg = get_settings()
     if venue not in venues.VENUES or symbol.upper() not in cfg.symbol_list or tf not in venues.TIMEFRAMES:
@@ -204,7 +225,7 @@ def api_candles(symbol: str, tf: int = 1, venue: str = "paper", n: int = 120):
 
 
 @app.get("/api/analysis")
-def api_analysis(symbol: str, venue: str = "paper"):
+def api_analysis(symbol: str, venue: str = "demo"):
     """Every indicator and factor behind the verdict for a symbol, live."""
     cfg = get_settings()
     if venue not in venues.VENUES or symbol.upper() not in cfg.symbol_list:
@@ -248,9 +269,6 @@ def api_stream(sym: str = ""):
                     except BrokerError:
                         continue
                     row = {}
-                    if v == "paper":
-                        from .paper import want_live
-                        want_live({p["symbol"] for p in opens if p["venue"] == "paper"} | set(focus))
                     for sym in cfg.symbol_list:
                         try:
                             tk = (b.tick_fast if hasattr(b, "tick_fast") else b.tick)(cfg.broker_symbol(sym))
@@ -446,7 +464,7 @@ _specs_cache: dict = {}
 
 
 @app.get("/api/specs")
-def api_specs(venue: str = "paper"):
+def api_specs(venue: str = "demo"):
     """Contract specification and live spread of every traded symbol, as the chosen venue's broker reports them (read in parallel, kept 10 s)."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -477,69 +495,20 @@ def api_specs(venue: str = "paper"):
                         "profit_ccy": info["currency_profit"], "base_ccy": info.get("currency_base", ""), "spread": round(sp, info["digits"] + 1),
                         "spread_points": round(sp / pt, 1) if pt else None, "bid": round(tk["bid"], info["digits"]), "ask": round(tk["ask"], info["digits"]),
                         "cost_per_lot": round(sp * info["trade_contract_size"], 2)})
-            if venue == "paper":
-                from .paper import default_spec
-                row["default"] = default_spec(sym)
-                row["custom"] = sym in (kv_get("paper_specs") or {})
         except BrokerError as e:
             row["error"] = str(e)
         return row
 
     with ThreadPoolExecutor(max_workers=8) as ex:
         rows = list(ex.map(one, cfg.symbol_list))
-    out = {"venue": venue, "editable": venue == "paper", "error": err, "rows": rows}
+    out = {"venue": venue, "editable": False, "error": err, "rows": rows}
     _specs_cache[venue] = (time.time(), out)
     return out
-
-
-@app.post("/api/paper/spec/{symbol}")
-def api_paper_spec(symbol: str, body: dict = Body(...)):
-    """Change the paper account's contract size, digits, spread or lot limits for one symbol ({"reset": true} restores defaults)."""
-    from .paper import reset_paper_spec, save_paper_spec
-
-    _specs_cache.clear()
-
-    if symbol.upper() not in get_settings().symbol_list:
-        raise HTTPException(400, "symbol is not in the traded list")
-    if body.get("reset"):
-        reset_paper_spec(symbol)
-        log(f"Paper spec for {symbol.upper()} reset to defaults", "warn")
-        return {"ok": True}
-    try:
-        spec = save_paper_spec(symbol, body)
-    except (ValueError, TypeError) as e:
-        raise HTTPException(400, str(e))
-    log(f"Paper spec for {symbol.upper()}: spread {spec['spread']:g}, contract {spec['contract']:g}, digits {spec['digits']}", "warn")
-    return spec
 
 
 @app.post("/api/allow-live")
 def api_allow_live(body: dict = Body(...)):
     return {"allow_live": venues.set_allow_live(bool(body.get("on")))}
-
-
-@app.post("/api/paper/reset")
-def api_paper_reset():
-    from .paper import get_paper
-
-    if engine.open_positions_view("paper"):
-        raise HTTPException(400, "Close the open paper positions first")
-    from sqlalchemy import delete
-
-    get_paper().reset()
-    with session() as s:   # the history goes too: closed paper trades, and the signals and journal lines behind them
-        ids = list(s.scalars(select(Signal.id).where(Signal.venue == "paper")))
-        n_pos = s.execute(delete(Position).where(Position.venue == "paper")).rowcount
-        if ids:
-            for k in range(0, len(ids), 500):
-                s.execute(delete(Activity).where(Activity.signal_id.in_(ids[k:k + 500])))
-        n_sig = s.execute(delete(Signal).where(Signal.venue == "paper")).rowcount
-        s.commit()
-    engine._strat_sig.clear()
-    venues.set_loss_streak("paper", 0)
-    kv_set("day_start:paper", None)
-    log(f"Paper account reset: {n_pos} trades and {n_sig} signals deleted", "warn")
-    return {"ok": True, "trades_deleted": n_pos, "signals_deleted": n_sig}
 
 
 @app.post("/api/tune")
@@ -615,20 +584,6 @@ def api_proven_only(body: dict = Body(...)):
     return {"proven_only": on}
 
 
-@app.post("/api/paper/balance")
-def api_paper_balance(body: dict = Body(...)):
-    """Set the paper account balance by hand."""
-    from .paper import get_paper
-
-    try:
-        amount = get_paper().set_balance(float(body.get("balance")))
-    except (ValueError, TypeError) as e:
-        raise HTTPException(400, str(e))
-    venues.set_loss_streak("paper", 0)
-    log(f"Paper balance set to ${amount:,.2f}", "warn")
-    return {"ok": True, "balance": amount}
-
-
 @app.post("/api/approve/{sid}")
 def api_approve(sid: int):
     try:
@@ -682,10 +637,10 @@ def api_close(venue: str, ticket: int):
 def api_diagnostics(venue: str = ""):
     """Read-only check of a venue's connection, symbol names and data feeds. Run this first after deploying."""
     cfg = get_settings()
-    v = venue or next((x for x in ("demo", "paper", "live") if venues.venue_cfg(x)["on"]), "demo")
+    v = venue or next((x for x in ("demo", "live") if venues.venue_cfg(x)["on"]), "demo")
     broker = get_broker(v)
-    out = {"mock": cfg.mt5_mock, "venue": v, "feed": cfg.paper_feed if v == "paper" else None, "broker": cfg.broker,
-           "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port} if cfg.broker == "mt5" else {"env": v if v != "paper" else "paper"}, "symbols": {}}
+    out = {"mock": cfg.mt5_mock, "venue": v, "broker": cfg.broker,
+           "bridge": {"host": cfg.mt5_host, "port": cfg.mt5_port} if cfg.broker == "mt5" else {"env": v}, "symbols": {}}
     try:
         broker.connect()
         a = broker.account()

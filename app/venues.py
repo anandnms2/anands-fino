@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from .config import get_settings
 from .db import iso, kv_get, kv_set, log, utcnow
 
-VENUES = ("paper", "demo", "live")
+VENUES = ("demo", "live")
 TIMEFRAMES = (1, 3, 5, 15, 30, 60)  # minutes; the chart and candle size a venue trades on
-LABEL = {"paper": "Paper", "demo": "Demo", "live": "Live"}
+LABEL = {"demo": "Demo", "live": "Live"}
 
 
 def allow_live() -> bool:
@@ -45,8 +45,6 @@ def due(tf: int, now: datetime) -> bool:
 
 def _defaults(v: str) -> dict:
     cfg = get_settings()
-    if v == "paper":
-        return {"on": bool(cfg.paper_mode), "auto": True, "tf": _tf0()}
     if v == "demo":
         return {"on": cfg.mode == "demo_auto", "auto": True, "tf": _tf0()}
     return {"on": cfg.mode in ("live_approval", "live_auto") and allow_live(), "auto": cfg.mode == "live_auto", "tf": _tf0()}

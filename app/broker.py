@@ -290,11 +290,7 @@ _brokers: dict = {}
 
 
 def get_broker(venue: str = "demo"):
-    """The broker connection behind a trading venue: paper (simulated), demo (cTrader demo) or live (cTrader live)."""
-    if venue == "paper":
-        from .paper import get_paper
-
-        return get_paper()
+    """The broker connection behind a trading venue: demo (cTrader demo) or live (cTrader live)."""
     if venue not in _brokers:
         s = get_settings()
         if s.mt5_mock:
