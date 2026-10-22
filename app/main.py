@@ -463,6 +463,13 @@ def api_symbols(body: dict = Body(...)):
 _specs_cache: dict = {}
 
 
+def _safe_account(broker):
+    try:
+        return broker.account()
+    except BrokerError:
+        return None
+
+
 @app.get("/api/specs")
 def api_specs(venue: str = "demo"):
     """Contract specification and live spread of every traded symbol, as the chosen venue's broker reports them (read in parallel, kept 10 s)."""
@@ -494,14 +501,16 @@ def api_specs(venue: str = "demo"):
                         "volume_min": info["volume_min"], "volume_step": info["volume_step"], "volume_max": info["volume_max"],
                         "profit_ccy": info["currency_profit"], "base_ccy": info.get("currency_base", ""), "spread": round(sp, info["digits"] + 1),
                         "spread_points": round(sp / pt, 1) if pt else None, "bid": round(tk["bid"], info["digits"]), "ask": round(tk["ask"], info["digits"]),
-                        "cost_per_lot": round(sp * info["trade_contract_size"], 2)})
+                        "cost_per_lot": round(sp * info["trade_contract_size"], 2),
+                        **{k: info.get(k) for k in ("swap_long", "swap_short", "swap_3days", "commission", "commission_type", "min_commission", "pip_position",
+                                                     "min_stop_distance", "distance_in", "short_selling", "trading_mode_name")}})
         except BrokerError as e:
             row["error"] = str(e)
         return row
 
     with ThreadPoolExecutor(max_workers=8) as ex:
         rows = list(ex.map(one, cfg.symbol_list))
-    out = {"venue": venue, "editable": False, "error": err, "rows": rows}
+    out = {"venue": venue, "editable": False, "error": err, "rows": rows, "fetched": iso(engine.utcnow()), "account": ({"login": a["login"], "server": a["server"]} if not err and (a := _safe_account(broker)) else None)}
     _specs_cache[venue] = (time.time(), out)
     return out
 
@@ -557,7 +566,12 @@ def api_backtest():
     from . import backtest
 
     st = backtest.status()
-    return {**st, "strategy_mode": engine.strategy_mode(), "proven_only": engine.proven_only(), "live_set": kv_get("strategies") or {}}
+    from . import strategies as S
+
+    rules = {"min_test": backtest.MIN_TEST_STRONG, "min_exp": backtest.OK_TEST_EXPECTANCY, "min_pf": backtest.OK_TEST_PF, "min_t": backtest.MIN_T, "min_t_fast": backtest.MIN_T_FAST,
+             "min_robust": backtest.MIN_ROBUST, "min_days_ctrader": backtest.MIN_DAYS_CTRADER, "min_days_yahoo": backtest.MIN_DAYS_BY_TF, "history_days": backtest.HISTORY_DAYS,
+             "timeframes": list(backtest.TIMEFRAMES), "n_strategies": len([k for k in S.STRATEGIES if k != S.BASELINE])}
+    return {**st, "strategy_mode": engine.strategy_mode(), "proven_only": engine.proven_only(), "live_set": kv_get("strategies") or {}, "rules": rules}
 
 
 @app.post("/api/backtest/run")
@@ -631,6 +645,17 @@ def api_close(venue: str, ticket: int):
         return {"status": "closed"}
     except BrokerError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/position/{venue}/{ticket}/levels")
+def api_levels(venue: str, ticket: int, body: dict = Body(...)):
+    """Move the stop and target of an open trade by hand."""
+    try:
+        return engine.set_levels(ticket, venue, float(body["sl"]), float(body["tp"]))
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, "send numbers for sl and tp") from e
+    except BrokerError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.get("/api/history-probe")

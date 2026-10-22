@@ -379,6 +379,10 @@ class CTraderBroker:
                 "volume_step": float(d.get("stepVolume") or 0) / lot,
                 "currency_profit": self._assets.get(int(light.get("quoteAssetId", 0)), ""),
                 "currency_base": self._assets.get(int(light.get("baseAssetId", 0)), ""),
+                "swap_long": d.get("swapLong"), "swap_short": d.get("swapShort"), "swap_3days": d.get("swapRollover3Days"),
+                "commission": d.get("commission"), "commission_type": d.get("commissionType"), "min_commission": d.get("minCommission"),
+                "pip_position": d.get("pipPosition"), "min_stop_distance": d.get("slDistance"), "distance_in": d.get("distanceSetIn"),
+                "short_selling": d.get("enableShortSelling"), "trading_mode_name": d.get("tradingMode"),
                 "trade_stops_level": 0, "filling_mode": 0,
                 "trade_mode": 4 if d.get("tradingMode", "ENABLED") in ("ENABLED", 0) else 0, "visible": True}
 

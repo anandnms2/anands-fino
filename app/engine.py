@@ -635,6 +635,40 @@ def close_position(ticket: int, venue: str = "demo") -> None:
     reconcile()
 
 
+def set_levels(ticket: int, venue: str, sl: float, tp: float) -> dict:
+    """Move the stop and target of an open trade by hand (chart drag or the trade strip). The stop must stay on the losing side of the price and the target on the winning side."""
+    if venue not in V.VENUES:
+        raise BrokerError("unknown venue")
+    with session() as ses:
+        pos = ses.get(Position, (ticket, venue))
+        if pos is None or pos.status != "open":
+            raise BrokerError("that trade is not open")
+        side, symbol, last, old_sl, old_tp = pos.side, pos.symbol, pos.last_price, pos.sl, pos.tp
+    broker = get_broker(venue)
+    broker.connect()
+    cfg = get_settings()
+    d = broker.symbol_info(cfg.broker_symbol(symbol))["digits"]
+    sl, tp = round(float(sl), d), round(float(tp), d)
+    px = last
+    try:
+        t = broker.tick(cfg.broker_symbol(symbol))
+        px = t["bid"] if side == "BUY" else t["ask"]     # a long closes on the bid, a short on the ask
+    except BrokerError:
+        pass
+    if not px:
+        raise BrokerError("no live price to check the levels against")
+    if side == "BUY" and not (sl < px < tp) or side == "SELL" and not (tp < px < sl):
+        raise BrokerError(f"For a {side}, the stop must be {'below' if side == 'BUY' else 'above'} the price ({px:g}) and the target {'above' if side == 'BUY' else 'below'} it.")
+    broker.modify_sltp(ticket, sl, tp)
+    with session() as ses:
+        row = ses.get(Position, (ticket, venue))
+        if row is not None:
+            row.sl, row.tp, row.sl0 = sl, tp, sl      # your stop becomes the new first stop, so the trailing steps count from it
+            ses.commit()
+    log(f"[{V.LABEL[venue]}] {symbol} #{ticket}: stop {old_sl:g} -> {sl:g}, target {old_tp:g} -> {tp:g} (moved by you)", "trade", symbol)
+    return {"sl": sl, "tp": tp}
+
+
 # ---------------------------------------------------------------- manual trades
 def _lot_math(cfg: Settings, broker, info: dict, account: dict, entry: float, sl: float) -> dict:
     """Value of one price unit per lot in account currency, the lots the risk budget buys, and the loss one lot would take at the stop."""
@@ -1040,7 +1074,7 @@ def state() -> dict:
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},
-        "tune": tune_table(), "strategy_mode": strategy_mode(), "proven_only": proven_only(), "strategies": kv_get("strategies") or {}, "bt_state": (kv_get("backtest") or {}).get("state", "never run"),
+        "tune": tune_table(), "strategy_mode": strategy_mode(), "proven_only": proven_only(), "strategies": kv_get("strategies") or {}, "bt_state": (kv_get("backtest") or {}).get("state", "never run"), "bt_finished": (kv_get("backtest") or {}).get("finished"),
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

@@ -103,28 +103,36 @@ function barLive() {
   const st = S.st; if (!st) return;
   const v = st.venues[S.venue] || {}, a = v.account, lf = liveFloat(), fl = lf != null ? lf : (v.floating || 0);
   const fe = $("bar-fl"), ee = $("bar-eq");
-  if (fe) { fe.textContent = (fl < 0 ? "-$" : "+$") + num(Math.abs(fl), 2); fe.className = "mono b " + (fl < 0 ? "bad" : "ok"); }
+  if (fe) { fe.textContent = (fl < 0 ? "-$" : "+$") + num(Math.abs(fl), 2); fe.className = "mono b " + (fl < 0 ? "bad" : fl > 0 ? "ok" : ""); }
   if (ee && a) ee.textContent = "$" + num(lf != null ? a.balance + lf : a.equity, 2);
 }
+const gr = (label, used, cap, text) => {
+  const p = cap ? Math.max(0, Math.min(100, (used / cap) * 100)) : 0, c = p >= 80 ? "var(--sell)" : p >= 50 ? "var(--accent)" : "var(--buy)";
+  return `<div class="gr"><span>${label}</span><div class="rb" role="img" aria-label="${esc(label)} ${Math.round(p)}% of its limit"><i style="width:${p}%;background:${c}"></i></div><span class="mono">${text}</span></div>`;
+};
 function renderBar() {
   const st = S.st; if (!st) return;
   const V = st.venues, v = V[S.venue] || {}, a = v.account, r = st.risk, pg = pageName();
-  const nav = [["terminal", "#/", "Terminal"], ["reports", "#/reports", "Reports"], ["strategies", "#/strategies", "Strategies"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
+  const nav = [["terminal", "#/", "Terminal"], ["strategies", "#/strategies", "Strategy Lab"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
+  const dpl = a ? a.day_pnl : null, dcap = r.daily_loss_cap_pct, lossUsed = a ? Math.max(0, -a.day_pnl_pct) : 0;
+  const kpi = (label, val, sub, id, cls) => `<div class="kpi"><span>${label}</span><b class="mono ${cls || ""}" ${id ? `id="${id}"` : ""}>${val}</b><i>${sub}</i></div>`;
   $bar.innerHTML = `<div class="bar-in"><div class="bar-r1"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
     <nav class="bnav" aria-label="Pages">${nav.map(([k, h, l]) => `<a href="${h}" class="${pg === k || (pg === "signal" && k === "terminal") ? "on" : ""}">${l}</a>`).join("")}</nav>
-    <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')">${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div></div>
-    <div class="bar-r2"><div class="metrics">
-      <div><span>BALANCE</span><b class="mono">${a ? "$" + num(a.balance, 2) : "–"}</b></div>
-      <div><span>EQUITY</span><b class="mono" id="bar-eq">${a ? "$" + num(a.equity, 2) : "–"}</b></div>
-      <div><span>FLOATING P/L</span><b class="mono b" id="bar-fl">–</b></div>
-      <div><span>OPEN RISK</span><b class="mono">${num(v.open_risk_pct || 0, 2)}% <i>/ ${num(r.open_risk_cap_pct, 1)}%</i></b></div>
-      <div><span>DAY P/L</span><b class="mono ${a && a.day_pnl < 0 ? "bad" : ""}">${a ? signed(a.day_pnl_pct, 2) + "%" : "–"} <i>/ -${r.daily_loss_cap_pct}%</i></b></div></div>
+    <div class="vtabs" role="tablist" aria-label="Venue">${Object.values(V).map((x) => `<button role="tab" aria-selected="${x.name === S.venue}" class="${x.name === S.venue ? "on" : ""}" onclick="pickVenue('${x.name}')"><span class="vd ${x.locked ? "lk" : x.on ? "on" : ""}"></span>${esc(x.label)} <span class="mono">${x.locked ? "LOCKED" : x.on ? "ON" : "OFF"}</span></button>`).join("")}</div>
     <div class="chips"><span class="chip"><span id="bar-dot" class="dot"></span><span class="mono" id="bar-lat">stream …</span></span>
       <span class="chip">Profile <b class="acc">${st.profile === "fast" ? "FAST" : "NORMAL"}</b></span>
       <button class="chip chipbtn" title="Click to switch: ON = a symbol with no proven strategy does not trade" onclick="act('/api/proven-only',{on:${!st.proven_only}},'Proven only ${st.proven_only ? "OFF" : "ON"}')">Proven only <b class="${st.proven_only ? "ok" : "mute"}">${st.proven_only ? "ON" : "OFF"}</b></button>
       <span class="chip">Trailing <b class="${st.trail ? "ok" : "mute"}">${st.trail ? "ON" : "OFF"}</b></span>
       <span class="chip">Claude veto <b class="${st.claude_veto ? "ok" : "mute"}">${st.claude_veto ? "ON" : "OFF"}</b></span>
-      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div></div>`;
+      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div>
+    <div class="strip2" aria-label="Account">
+      ${kpi("BALANCE", a ? "$" + num(a.balance, 2) : "–", a ? (a.demo ? "cTrader demo" : "cTrader live") : "not connected")}
+      ${kpi("EQUITY", a ? "$" + num(a.equity, 2) : "–", a ? signed(a.day_pnl_pct, 2) + "% today" : "", "bar-eq")}
+      ${kpi("FLOATING P/L", "–", (v.open_count || 0) + " open", "bar-fl", "b")}
+      ${kpi("OPEN RISK", num(v.open_risk_pct || 0, 2) + "%", "limit " + num(r.open_risk_cap_pct, 1) + "%")}
+      ${kpi("DAY P/L", dpl == null ? "–" : (dpl < 0 ? "-$" : "+$") + num(Math.abs(dpl), 2), "limit -" + dcap + "%", "", dpl < 0 ? "bad" : dpl > 0 ? "ok" : "")}
+      <div class="kpi guard"><span>GUARD RAILS · THIS VENUE</span>
+        ${gr("Daily loss", lossUsed, dcap, num(lossUsed, 1) + " / " + dcap + "%")}${gr("Open risk", v.open_risk_pct || 0, r.open_risk_cap_pct, num(v.open_risk_pct || 0, 1) + " / " + num(r.open_risk_cap_pct, 1) + "%")}${gr("Loss streak", v.loss_streak || 0, r.max_loss_streak, (v.loss_streak || 0) + " / " + r.max_loss_streak)}</div></div></div>`;
   document.documentElement.style.setProperty("--barh", $bar.offsetHeight + "px");
   barLive();
 }
@@ -140,7 +148,7 @@ function mountTerminal() {
   $app.innerHTML = `<div id="banners"></div><div class="term">
     <aside class="card wl"><div class="wl-h"><span class="lab">Watchlist</span><span class="mute" style="font-size:11px" id="wlc"></span></div>
       <div class="wl-r head"><span>SYMBOL</span><span>BID</span><span>ASK</span><span>SC</span></div><div id="wl"></div></aside>
-    <section class="card chartc"><div class="chead" id="chead"></div><div class="cv" id="cvw"><canvas id="cv" role="img" aria-label="Live candle chart"></canvas></div><div class="cfoot" id="cfoot"></div></section>
+    <section class="card chartc"><div class="chead" id="chead"></div><div class="cv" id="cvw"><canvas id="cv" role="img" aria-label="Live candle chart"></canvas></div><div class="cfoot" id="cfoot"></div><div class="why" id="why"></div></section>
     <aside class="side" id="side"></aside>
     <section class="card bottom"><div class="tabs" id="tabs"></div><div id="btab"></div></section></div>`;
   S.mounted = true;
@@ -170,15 +178,16 @@ function stratBadge(sym) {
   const st = S.st;
   if (!st.strategy_mode) return `<i class="sb off" title="Strategy mode is off: trading on the score rules">SCORE</i>`;
   const x = (st.strategies || {})[sym];
-  if (x) return `<i class="sb ok" title="Proven on unseen data: ${esc(x.strategy)}, ${x.tf}m candles, stop ${x.stop_k} ATR, target ${x.rr}x. Unseen: ${x.test.n} trades, ${num(x.test.exp, 2)}R each, PF ${num(x.test.pf, 2)}">PROVEN · ${esc(x.strategy)}</i>`;
+  if (x) return `<i class="sb ok" title="Proven on unseen data: ${esc(x.strategy)}, ${x.tf}m candles, stop ${x.stop_k} ATR, target ${x.rr}x. Unseen: ${x.test.n} trades, ${num(x.test.exp, 2)}R each, PF ${num(x.test.pf, 2)}">PROVEN · ${esc(x.strategy)} · ${tfName(x.tf).toUpperCase()}</i>`;
   if (st.bt_state === "running") return `<i class="sb test" title="A backtest is running">TESTING</i>`;
-  return `<i class="sb un" title="No setup has passed the backtest yet. It still trades on the normal score rules, with the same risk gate.">UNPROVEN</i>`;
+  return st.proven_only ? `<i class="sb un" title="No setup has passed the backtest. Proven only is ON, so this symbol does not trade.">UNPROVEN · NO TRADE</i>` : `<i class="sb un" title="No setup has passed the backtest yet. It trades on the normal score rules, with the same risk gate.">UNPROVEN · SCORE RULES</i>`;
 }
 /* watchlist */
 function latestFor(sym) { return S.latest.find((r) => r.symbol === sym); }
 function renderWatch() {
-  const st = S.st, list = st.symbols;
-  $("wlc").textContent = list.length + " symbols";
+  const st = S.st, pv = (x) => ((st.strategies || {})[x] ? 1 : 0), sa = (x) => Math.abs((latestFor(x) || {}).score || 0);
+  const list = st.symbols.slice().sort((a, b) => pv(b) - pv(a) || sa(b) - sa(a));   // proven setups first, then the strongest score
+  $("wlc").textContent = list.length + " symbols · sorted by edge";
   $("wl").innerHTML = list.map((s) => {
     const r = latestFor(s), sc = r ? r.score : null;
     return `<div class="wl-r ${s === S.sym ? "sel" : ""}" role="button" tabindex="0" onclick="pickSym('${s}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pickSym('${s}')}" aria-pressed="${s === S.sym}">
@@ -255,10 +264,13 @@ function drawChart() {
   const emaOf = (k) => { const a = 2 / (k + 1), out = []; let e = null; for (const c of S.candles) { e = e == null ? c[4] : e + a * (c[4] - e); out.push(e); } return out.slice(-view.length); };
   const EMAS = S.candles.length > 60 ? [[20, "#F58A14"], [50, "#5AA9E6"], [200, "#B48CF2"]].map(([k, col]) => [k, col, emaOf(k)]) : [];
   if (view.length < 2) { g.fillStyle = "#9C9EA6"; g.font = "13px Inter,sans-serif"; g.fillText("Loading candles…", 16, 28); return; }
-  const P = openPos(S.sym), d = dig(S.sym);
+  const P0 = openPos(S.sym), d = dig(S.sym), P = P0 && S.drag && S.drag.ticket === P0.ticket ? { ...P0, [S.drag.k]: S.drag.v } : P0;
+  cv.style.touchAction = P0 ? "none" : "";
   let lo = Math.min(...view.map((c) => c[3])), hi = Math.max(...view.map((c) => c[2]));
   if (P) { lo = Math.min(lo, P.tp, P.sl, P.entry); hi = Math.max(hi, P.tp, P.sl, P.entry, P.sl0 || P.sl); }
   const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+  if (S.drag) { lo = S.drag.lo; hi = S.drag.hi; }   // the scale stays put while a line is being dragged
+  S.geo = { lo, hi, h };
   const Y = (v) => 8 + (1 - (v - lo) / (hi - lo)) * (h - 20), x0 = w - PAD - view.length * slot;
   g.font = "11px 'JetBrains Mono',monospace"; g.textBaseline = "middle";
   for (let i = 0; i <= 5; i++) { const v = lo + ((hi - lo) * i) / 5, y = Y(v); g.strokeStyle = "#1a1a1f"; g.setLineDash([3, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#6c6e75"; g.fillText(v.toFixed(d), w - PAD + 6, y); }
@@ -272,8 +284,8 @@ function drawChart() {
   const tag = (v, col, bg, txt, dash) => { const y = Y(v); g.strokeStyle = col; g.setLineDash(dash || []); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]);
     const t = txt + " " + v.toFixed(d), tw = g.measureText(t).width + 10; g.fillStyle = bg; g.fillRect(w - PAD - tw - 4, y - 9, tw, 18); g.fillStyle = col; g.textAlign = "left"; g.fillText(t, w - PAD - tw + 1, y); };
   if (P) {
-    tag(P.tp, "#3DC48F", "#12281c", "TP", [5, 4]); tag(P.entry, "#EDEDEE", "#26262b", "ENTRY");
-    tag(P.sl, "#F06D6D", "#2a1414", P.sl !== P.sl0 ? "SL · trailed" : "SL", [5, 4]);
+    tag(P.tp, "#3DC48F", "#12281c", "TP ⇅", [5, 4]); tag(P.entry, "#EDEDEE", "#26262b", "ENTRY");
+    tag(P.sl, "#F06D6D", "#2a1414", (P.sl !== P.sl0 ? "SL · trailed" : "SL") + " ⇅", [5, 4]);
     if (P.sl !== P.sl0) { const y = Y(P.sl0); g.strokeStyle = "#5a3333"; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#8a6a6a"; g.fillText("first stop " + P.sl0.toFixed(d), 8, y - 8); }
   }
   const last = view[view.length - 1][4], yl = Y(last);
@@ -281,6 +293,30 @@ function drawChart() {
   g.fillStyle = "#F58A14"; g.fillRect(w - PAD, yl - 10, PAD - 2, 20); g.fillStyle = "#16181B"; g.font = "600 12px 'JetBrains Mono',monospace"; g.fillText(last.toFixed(d), w - PAD + 5, yl);
 }
 window.addEventListener("resize", queueDraw);
+/* drag the stop or target line on the chart to move it; on release the new level is sent to the broker */
+const gy = (v) => 8 + (1 - (v - S.geo.lo) / (S.geo.hi - S.geo.lo)) * (S.geo.h - 20);
+const gp = (y) => Math.min(S.geo.hi, Math.max(S.geo.lo, S.geo.lo + (1 - (y - 8) / (S.geo.h - 20)) * (S.geo.hi - S.geo.lo)));
+const hitLine = (e) => { const P = openPos(S.sym); if (!P || !S.geo) return null; const y = e.clientY - e.target.getBoundingClientRect().top; return Math.abs(gy(P.sl) - y) <= 8 ? "sl" : Math.abs(gy(P.tp) - y) <= 8 ? "tp" : null; };
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target || e.target.id !== "cv") return;
+  const k = hitLine(e), P = openPos(S.sym); if (!k) return;
+  S.drag = { k, v: P[k], lo: S.geo.lo, hi: S.geo.hi, ticket: P.ticket, venue: P.venue, y0: e.clientY, moved: false };
+  e.target.setPointerCapture(e.pointerId); e.preventDefault();
+});
+document.addEventListener("pointermove", (e) => {
+  if (!e.target || e.target.id !== "cv") return;
+  if (!S.drag) { e.target.style.cursor = hitLine(e) ? "ns-resize" : ""; return; }
+  if (Math.abs(e.clientY - S.drag.y0) > 3) S.drag.moved = true;
+  S.drag.v = gp(e.clientY - e.target.getBoundingClientRect().top); queueDraw();
+});
+document.addEventListener("pointerup", async (e) => {
+  const dr = S.drag; if (!dr) return; S.drag = null;
+  const P = openPos(S.sym); if (!dr.moved || !P || P.ticket !== dr.ticket) { queueDraw(); return; }
+  const v = +dr.v.toFixed(dig(P.symbol)), sl = dr.k === "sl" ? v : P.sl, tp = dr.k === "tp" ? v : P.tp;
+  if (!confirm(`Move the ${dr.k === "sl" ? "STOP" : "TARGET"} of ${P.symbol} ${P.side} to ${v}?` + (dr.venue === "live" ? "\n\nLIVE account." : ""))) { queueDraw(); return; }
+  try { await api(`/api/position/${dr.venue}/${dr.ticket}/levels`, "POST", { sl, tp }); toast("Stop and target moved"); } catch (err) { toast(err.message, true); }
+  render();
+});
 
 /* decision panel */
 const WSTAT = { aligned: ["Aligned with the trade", "ok"], holding: ["Holding, view neutral", "mute"], reversing: ["View turning against the trade", "warn"], reversal: ["Reversal building", "bad"] };
@@ -317,41 +353,84 @@ function watchCard() {
       ${Object.entries(w.factors).map(([k, f]) => { const v = f.score == null ? null : f.score * (p.side === "BUY" ? 1 : -1); return `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${v == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(v)}<span class="mono ${v > 0 ? "ok" : v < 0 ? "bad" : "mute"}">${v == null ? "–" : signed(v, 0)}</span></div>`; }).join("")}
       ${w.action ? `<div class="lab">Last action</div><p>${esc(w.action)}</p>` : ""}</div></section>`;
 }
-async function renderSide() {
+/* win-chance as a range (95% interval from the unseen trades), with the win rate that breaks even at this target */
+function wilson(win, n) {
+  if (!n) return [0, 0];
+  const p = win / 100, z = 1.96, d = 1 + (z * z) / n, c = (p + (z * z) / (2 * n)) / d, h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
+  return [Math.max(0, c - h) * 100, Math.min(1, c + h) * 100];
+}
+function rangeBar(t, rr) {
+  const [lo, hi] = wilson(t.win, t.n), be = 100 / (1 + rr), thin = lo < be;
+  return `<div class="rng" role="img" aria-label="Win chance ${num(lo, 0)} to ${num(hi, 0)} percent, break-even ${num(be, 0)} percent"><div class="rt"><i class="rr" style="left:${lo}%;width:${Math.max(1, hi - lo)}%"></i><i class="rbe" style="left:${be}%"></i><i class="rw" style="left:${t.win}%"></i></div>
+    <div class="rl"><span class="mono">${num(lo, 0)}%</span><span class="mono">${num(t.win, 1)}% wins</span><span class="mono">${num(hi, 0)}%</span></div></div>
+    <div class="mute" style="font-size:12px;line-height:1.5">Break-even needs ${num(be, 0)}% at ${rr}:1 (before spread). ${thin ? "The low end of the range sits below it, so this setup is thin: size it small." : "Even the low end clears it."}</div>`;
+}
+function decisionCard(s) {
+  const pend = S.appr.find((a) => a.venue === S.venue && a.symbol === S.sym);
+  const bc = s.bias === "BUY" ? "ok" : s.bias === "SELL" ? "bad" : "mute";
+  return `<section class="card dec"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2><span class="mono mute">${hm(s.ts)}</span></div>
+    <div class="pad"><div class="dline"><b class="big3 ${bc}">${esc(s.bias || "NONE")}</b>${s.lots != null ? `<span class="mono">${num(s.lots, 2)} lots</span>` : ""}${stPill(s.status)}</div>
+    <p>${esc(s.reason || "")}</p>${pend ? `<div class="dact"><button class="btn pri" onclick="act('/api/approve/${pend.id}',{},'Approved')">Approve</button><button class="btn" onclick="act('/api/reject/${pend.id}',{},'Skipped')">Skip</button></div>` : ""}</div></section>`;
+}
+function trustCard() {
+  const x = (S.st.strategies || {})[S.sym], f = S.st.bt_finished;
+  if (!x) return `<section class="card"><div class="hd"><h2>Why you can trust it</h2><span class="pill ${S.st.proven_only ? "none" : "warn"}">no proof</span></div><div class="pad mute">${esc(S.sym)} has no setup that earned on unseen data. ${S.st.proven_only ? "Proven only is ON, so it will not trade." : "It trades on the score rules and is marked UNPROVEN."} <a href="#/strategies">Open the Strategy Lab</a></div></section>`;
+  const t = x.test;
+  return `<section class="card trust"><div class="hd"><h2>Why you can trust it · unseen data</h2><span class="pill buy">proven</span></div><div class="pad">
+    <div class="tstat"><div><b class="mono ${t.exp >= 0 ? "ok" : "bad"}">${signed(t.exp, 2)}R</b><i>per trade</i></div><div><b class="mono">${t.n}</b><i>trades</i></div><div><b class="mono">${num(t.pf, 2)}</b><i>profit factor</i></div></div>
+    ${rangeBar(t, x.rr)}
+    <div class="mute" style="font-size:11px;margin-top:8px">${esc(x.strategy)} · ${tfName(x.tf)} · luck score t = ${num(t.t, 2)}${f ? " · re-tested " + hm(f) : ""} · <a href="#/strategies">open in Strategy Lab</a></div></div></section>`;
+}
+function renderWhy() {
+  const el = $("why"); if (!el) return;
+  const st = S.st, x = (st.strategies || {})[S.sym], c = S.an[S.venue + ":" + S.sym], d = c && c.d, s = S.det, p = (S.px[S.venue] || {})[S.sym];
+  const ev = (st.events || []).filter((e) => e.impact === "High" && e.minutes > -30)[0];
+  const card = (l, v, sub, cls) => `<div class="wy"><span>${l}</span><b class="${cls || ""}">${v}</b><i>${sub}</i></div>`;
+  el.innerHTML = card("SETUP", x ? esc(x.strategy) : "Score rules", x ? `${tfName(x.tf)} · stop ${x.stop_k} ATR · target ${x.rr}×` : (st.proven_only ? "unproven: no trade while Proven only is ON" : "unproven: trades on the score"), x ? "ok" : "")
+    + card("REGIME", d ? esc(d.ind.htf || "no higher-timeframe read") : "reading…", d ? `RSI ${d.ind.rsi.toFixed(0)} · ATR ${pxs(d.ind.atr, S.sym)}` : "")
+    + card("NEWS", ev ? esc(ev.title) : "Clear", ev ? `${esc(ev.currency)} in ${ev.minutes} min` : "no high-impact event in 36 h", ev && ev.minutes <= 60 ? "warn" : ev ? "" : "ok")
+    + card("SIZE", s && s.lots != null ? num(s.lots, 2) + " lots" : "no order", `risk ${st.risk.risk_per_trade_pct}% per trade${p ? " · spread " + pxs(p[1] - p[0], S.sym) : ""}`);
+}
+async function renderSide() { await renderSideInner(); renderWhy(); }
+async function renderSideInner() {
   const el = $("side"); if (!el) return;
   S.an = S.an || {}; loadAn();
-  const top = watchCard() + indCard();
+  const top = watchCard();
   const r = latestFor(S.sym);
-  if (!r) { el.innerHTML = top + `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2></div><div class="pad mute">No cycle has analysed this symbol yet.</div></section>`; return; }
+  if (!r) { el.innerHTML = top + trustCard() + `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2></div><div class="pad mute">No cycle has analysed this symbol yet.</div></section>` + indCard(); return; }
   const vs = (r.venues || []).find((x) => x.venue === S.venue), id = vs ? vs.id : r.id;
   if (id !== S.detId) { try { S.det = await api("/api/signal/" + id); S.detId = id; } catch (e) { S.det = null; } }
-  const s = S.det; if (!s || !$("side")) { if ($("side")) $("side").innerHTML = top; return; }
-  const c = s.claude || {}, g = s.gate || {}, l = s.levels || {}, th = S.st.thresholds;
-  $("side").innerHTML = top + `<section class="card"><div class="hd"><h2>Decision · ${esc(S.sym)}</h2><span class="mono mute">${hm(s.ts)}</span></div>
-      <div class="pad"><div style="display:flex;justify-content:space-between;align-items:baseline"><span>Rules score ${biasPill(s.bias)}</span><b class="mono big2 ${s.score >= 0 ? "ok" : "bad"}">${signed(s.score, 1)}</b></div>
-      <div class="mute" style="font-size:12px;margin:2px 0 8px">${s.agree}/${s.available} factors agree · needs ${th.agree_pct || 0}% and ±${th.score}</div>
-      ${Object.entries(s.factors || {}).map(([k, f]) => `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${f.score == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(f.score)}<span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "–" : signed(f.score, 0)}</span></div>`).join("")}</div></section>
-    <section class="card"><div class="hd"><h2>Risk gate · code</h2><span class="pill ${g.ok ? "buy" : g.checks ? "warn" : "none"}">${g.ok ? "passed" : g.checks ? "blocked" : "not run"}</span></div>
-      ${(g.checks || []).map((k) => `<div class="row sm"><span><span class="dot ${k.ok ? "g" : "r"}"></span>${esc(k.name)}</span><span class="mono mute" style="text-align:right">${esc(k.detail)}</span></div>`).join("") || '<div class="pad mute">The gate has not run for this signal.</div>'}</section>
+  const s = S.det; if (!s || !$("side")) { if ($("side")) $("side").innerHTML = top + trustCard() + indCard(); return; }
+  const c = s.claude || {}, g = s.gate || {}, l = s.levels || {}, th = S.st.thresholds, ck = g.checks || [];
+  $("side").innerHTML = top + decisionCard(s) + trustCard() + `<section class="card"><div class="hd"><h2>Risk gate · code</h2><span class="pill ${g.ok ? "buy" : g.checks ? "warn" : "none"}">${ck.length ? ck.filter((k) => k.ok).length + " of " + ck.length : "not run"}</span></div>
+      ${ck.map((k) => `<div class="row sm"><span><i class="mk ${k.ok ? "g" : "r"}">${k.ok ? "✓" : "✕"}</i>${esc(k.name)}</span><span class="mono mute" style="text-align:right">${esc(k.detail)}</span></div>`).join("") || '<div class="pad mute">The gate has not run for this signal.</div>'}</section>
     <section class="card claude"><div class="hd"><h2>Claude · final say</h2><span class="pill ${c.decision === "YES" ? "buy" : "none"}">${esc(c.decision || "not asked")}${c.confidence != null ? " " + num(c.confidence, 2) : ""}</span></div>
       ${c.thesis || c.against ? `<div class="pad"><p>${esc(c.thesis)}</p>${c.against ? `<div class="lab">Against</div><p>${esc(c.against)}</p>` : ""}${c.main_risk ? `<div class="lab">Main risk</div><p>${esc(c.main_risk)}</p>` : ""}</div>` : `<div class="pad mute">${esc(c.error || s.reason || "Claude was not asked.")}</div>`}</section>
+    <section class="card"><div class="hd"><h2>Rules score ${biasPill(s.bias)}</h2><b class="mono big2 ${s.score >= 0 ? "ok" : "bad"}">${signed(s.score, 1)}</b></div>
+      <div class="pad"><div class="mute" style="font-size:12px;margin:0 0 8px">${s.agree}/${s.available} factors agree · needs ${th.agree_pct || 0}% and ±${th.score}</div>
+      ${Object.entries(s.factors || {}).map(([k, f]) => `<div class="frow"><span style="text-transform:capitalize">${esc(k)}</span>${f.score == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(f.score)}<span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "–" : signed(f.score, 0)}</span></div>`).join("")}</div></section>
     <section class="card"><div class="hd"><h2>Order</h2><a href="#/signal/${s.id}">full detail</a></div>
       <div class="row sm"><span>Entry</span><span class="mono">${esc(l.entry)}</span></div><div class="row sm"><span>Stop</span><span class="mono bad">${esc(l.sl)}</span></div>
-      <div class="row sm"><span>Target</span><span class="mono ok">${esc(l.tp)}</span></div><div class="row sm"><span>R:R · lots</span><span class="mono">${esc(l.rr)} · ${s.lots != null ? num(s.lots, 2) : "–"}</span></div>
-      <div class="row sm"><span>Status</span><span>${stPill(s.status)}</span></div></section>`;
+      <div class="row sm"><span>Target</span><span class="mono ok">${esc(l.tp)}</span></div><div class="row sm"><span>R:R · lots</span><span class="mono">${esc(l.rr)} · ${s.lots != null ? num(s.lots, 2) : "–"}</span></div></section>` + indCard();
 }
 
 /* bottom tabs */
+window.saveLv = (venue, ticket) => {
+  const sl = Number($("sl-" + ticket).value), tp = Number($("tp-" + ticket).value);
+  if (!sl || !tp) { toast("Enter a stop and a target", true); return; }
+  S.edit = 0; act(`/api/position/${venue}/${ticket}/levels`, { sl, tp }, "Stop and target moved");
+};
 function renderBottom() {
+  if (S.edit && document.activeElement && document.activeElement.classList.contains("lvin")) return;   // do not redraw under a box being edited
   const mine = S.posd.open.filter((p) => p.venue === S.venue), pend = S.appr.filter((a) => a.venue === S.venue);
   const tabs = [["pos", `Positions (${mine.length})`], ["pend", `Pending approval (${pend.length})`], ["hist", "History"], ["log", "Journal"]];
-  $("tabs").innerHTML = tabs.map(([k, l]) => `<button class="${S.tab === k ? "on" : ""}" onclick="pickTab('${k}')">${l}</button>`).join("") + `<span class="mute tnote">positions re-priced on every tick · stops checked every 5 s</span>`;
+  $("tabs").innerHTML = tabs.map(([k, l]) => `<button class="${S.tab === k ? "on" : ""}" onclick="pickTab('${k}')">${l}</button>`).join("") + `<span class="mute tnote">positions re-priced on every tick · edit the stop or target boxes, or drag the lines on the chart</span>`;
   let h = "";
   if (S.tab === "pos") {
     h = `<div class="tw"><div class="ptable"><div class="prow head"><span>SYMBOL</span><span>SIDE</span><span>LOTS</span><span>ENTRY</span><span>LIVE</span><span>STOP</span><span>TARGET</span><span>STOP ◂ PRICE ▸ TARGET</span><span class="r">P/L</span><span class="r">R</span><span></span></div>
       ${mine.map((p) => `<div class="prow" data-k="${p.venue}:${p.ticket}" data-e="${p.entry}" data-sl="${p.sl}" data-tp="${p.tp}" data-side="${p.side}">
         <span><a href="#/" class="symlink" title="Open ${esc(p.symbol)} chart" onclick="openTrade('${p.venue}','${esc(p.symbol)}',${p.tf || 0});return false"><b>${esc(p.symbol)}</b>${stratBadge(p.symbol)}${p.tf ? ` <i class="mute tfm">${p.tf >= 60 ? p.tf / 60 + "h" : p.tf + "m"}</i>` : ""}</a> ${p.sl !== p.sl0 ? '<i class="trail">TRAILING</i>' : ""}${p.watch ? `<i class="trail ${p.watch.status === "reversing" || p.watch.status === "reversal" ? "rev" : ""}" title="Re-scored every 30 s on all 7 factors">${p.watch.status === "reversal" ? "REVERSAL" : p.watch.status === "reversing" ? "TURNING" : "WATCH"} ${signed(p.watch.signed, 0)}</i>` : ""}</span><span class="${p.side === "BUY" ? "ok" : "bad"}"><b>${esc(p.side)}</b></span><span class="mono">${num(p.lots, 2)}</span>
-        <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span class="mono bad">${pxs(p.sl, p.symbol)}</span><span class="mono ok">${pxs(p.tp, p.symbol)}</span>
+        <span class="mono mute">${pxs(p.entry, p.symbol)}</span><span class="mono lv"><b>${pxs(p.last_price, p.symbol)}</b></span><span><input class="lvin bad" id="sl-${p.ticket}" type="number" step="any" value="${p.sl}" aria-label="Stop loss for ${esc(p.symbol)}" onfocus="S.edit=1" onblur="S.edit=0" onchange="saveLv('${p.venue}',${p.ticket})" onkeydown="if(event.key==='Enter')this.blur()"></span><span><input class="lvin ok" id="tp-${p.ticket}" type="number" step="any" value="${p.tp}" aria-label="Target for ${esc(p.symbol)}" onfocus="S.edit=1" onblur="S.edit=0" onchange="saveLv('${p.venue}',${p.ticket})" onkeydown="if(event.key==='Enter')this.blur()"></span>
         <span class="pbar"><i class="pf"></i><i class="pn"></i></span><span class="mono r pl ${p.floating < 0 ? "bad" : "ok"}"><b>${money(p.floating)}</b></span><span class="mono r pr">–</span>
         <button class="btn dng sm" onclick="askAct('Close ${esc(p.symbol)} at market?','/api/close/${p.venue}/${p.ticket}','Closed')">Close</button></div>`).join("") || '<div class="pad mute" style="padding-top:16px">Nothing open on this venue.</div>'}</div></div>`;
   } else if (S.tab === "pend") {
@@ -584,38 +663,73 @@ let specVenue = "demo";
 async function specs() {
   curPath = "/api/specs?venue=" + specVenue;
   const r = await cget(curPath);
-  let html = pageHead("Contract specifications", "What each venue's broker says a lot is, and what it costs to trade", `<span class="seg" style="padding:0">${["demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>`);
-  html += `<p class="mute" style="margin:0">${"Read from the cTrader account itself: contract size, digits, lot limits and the live spread are the broker's own, so metals, yen pairs and any non-standard symbol are sized from these numbers."}</p>`;
+  let html = pageHead("Contract specifications", "Straight from the cTrader account. Read-only: nothing here can be edited", `<span class="seg" style="padding:0">${["demo", "live"].map((v) => `<button aria-pressed="${specVenue === v}" onclick="specVenue='${v}';render()">${VLABEL[v]}</button>`).join("")}</span>`);
+  html += `<div class="note" style="margin:0"><span class="pill acc">READ-ONLY</span> ${r.account ? `Account <b class="mono">${esc(r.account.login)}</b> on <b>${esc(r.account.server)}</b> · ` : ""}contract size, digits, lot limits, swaps, commission and the live spread are the broker's own values${r.fetched ? ", read " + hm(r.fetched) : ""}. Lots, costs and stop distances in the app are sized from these numbers, so they cannot be changed here.</div>`;
   if (r.error) html += `<div class="banner warn"><strong>${esc(VLABEL[specVenue])} not reachable.</strong><span class="mute">${esc(r.error)}</span></div>`;
-  const inp = (id, sym, v, w) => `<input id="${id}_${sym}" value="${esc(v)}" style="width:${w}px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:12px var(--font-mono)">`;
-  html += `<section class="card"><div class="tw"><table style="min-width:900px"><thead><tr><th>Symbol</th><th>Digits</th><th>Units per lot</th><th>Lot min / step</th><th>P/L in</th><th>Spread (price)</th><th>Points</th><th>Cost per lot</th><th>Bid / Ask</th></tr></thead><tbody>`;
+  const dash = (v) => (v == null || v === "" ? "–" : esc(v));
+  const swap = (v) => (v == null ? "–" : num(v, 2));
+  html += `<section class="card"><div class="tw"><table style="min-width:1240px"><thead><tr><th>Symbol</th><th>Digits</th><th>Units per lot</th><th>Lot min / step / max</th><th>P/L in</th><th>Spread</th><th>Points</th><th>Cost per lot</th><th>Swap long / short</th><th>Commission (as reported)</th><th>Min stop dist.</th><th>Bid / Ask</th></tr></thead><tbody>`;
   for (const x of r.rows) {
-    if (!x.ok) { html += `<tr><td><strong>${esc(x.symbol)}</strong></td><td colspan="8" class="mute">${esc(x.error || "no data")}</td></tr>`; continue; }
-      html += `<tr><td><strong>${esc(x.symbol)}</strong> <span class="mute mono" style="font-size:11px">${esc(x.broker_symbol)}</span></td><td class="mono">${x.digits}</td><td class="mono">${num(x.contract, 0)}</td>
-        <td class="mono">${x.volume_min} / ${x.volume_step}</td><td class="mono">${esc(x.profit_ccy)}</td><td class="mono">${esc(x.spread)}</td><td class="mono">${x.spread_points ?? "–"}</td>
-        <td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td></tr>`;
+    if (!x.ok) { html += `<tr><td><strong>${esc(x.symbol)}</strong></td><td colspan="11" class="mute">${esc(x.error || "no data")}</td></tr>`; continue; }
+    html += `<tr><td><strong>${esc(x.symbol)}</strong> <span class="mute mono" style="font-size:11px">${esc(x.broker_symbol)}</span></td><td class="mono">${x.digits}</td><td class="mono">${num(x.contract, 0)}</td>
+      <td class="mono">${x.volume_min} / ${x.volume_step} / ${x.volume_max}</td><td class="mono">${dash(x.profit_ccy)}</td><td class="mono">${esc(x.spread)}</td><td class="mono">${x.spread_points ?? "–"}</td>
+      <td class="mono">${num(x.cost_per_lot, 2)} ${esc(x.profit_ccy)}</td><td class="mono">${swap(x.swap_long)} / ${swap(x.swap_short)}${x.swap_3days != null ? ` <i class="mute" style="font-size:10px;font-style:normal">3-day: ${esc(x.swap_3days)}</i>` : ""}</td>
+      <td class="mono">${x.commission ? esc(x.commission) + (x.commission_type != null ? ` <i class="mute" style="font-size:10px;font-style:normal">type ${esc(x.commission_type)}</i>` : "") : "none"}</td><td class="mono">${dash(x.min_stop_distance)}</td><td class="mono mute">${esc(x.bid)} / ${esc(x.ask)}</td></tr>`;
   }
   html += `</tbody></table></div></section>`;
   $app.innerHTML = html;
 }
 
 
-/* ------------------------------------------------------------ strategies and backtest */
-let btTimer = null;
+/* ------------------------------------------------------------ strategy lab */
+let btTimer = null, LAB = null;
+window.labPick = (sym, tf) => { LAB = [sym, tf]; render(); };
 async function strategiesPage() {
-  const d = await api("/api/backtest"), st = S.st, rows = (d.rows || []).slice().sort((a, b) => a.symbol.localeCompare(b.symbol) || a.tf - b.tf);
-  const run = d.state === "running", live = d.live_set || {};
-  const pf = (t) => (t ? `${t.n} trades · ${num(t.win, 0)}% win · ${t.exp >= 0 ? "+" : ""}${num(t.exp, 2)}R · PF ${num(t.pf, 2)}${t.t != null ? " · t " + num(t.t, 1) : ""}` : "–");
-  let h = pageHead("Strategies", "Tested on 28 days of 1/3-minute, 60 days of 5/15/30-minute and about 2 years of hourly candles, spread paid, chosen on the first 60% and judged on the last 40% they never saw",
+  const d = await api("/api/backtest"), st = S.st, rows = d.rows || [], R = d.rules || {}, run = d.state === "running", live = d.live_set || {};
+  const by = {}; rows.forEach((r) => { (by[r.symbol] = by[r.symbol] || {})[r.tf] = r; });
+  const tfs = R.timeframes || [1, 3, 5, 15, 30, 60], syms = st.symbols.filter((x) => by[x]).concat(Object.keys(by).filter((x) => !st.symbols.includes(x)));
+  const nProven = rows.filter((r) => r.ok).length, days = rows.length ? Math.max(...rows.map((r) => r.days || 0)) : 0, nCt = rows.filter((r) => r.source === "ctrader").length;
+  const fin = d.finished ? new Date(d.finished) : null, nextH = fin ? Math.round((fin.getTime() + 2 * 86400000 - Date.now()) / 3600000) : null;
+  const sel = (LAB && by[LAB[0]] && by[LAB[0]][LAB[1]]) || rows.find((r) => r.ok) || rows[0];
+  const tot = rows.length, kp = (l, v, sub, c) => `<div class="lkpi"><span>${l}</span><b class="mono ${c || ""}">${v}</b><i>${sub}</i></div>`;
+  let h = pageHead("Strategy Lab", fin ? `Last full test ${hm(d.finished)} · next in ${nextH != null && nextH > 0 ? nextH + " h" : "due"} · ${R.n_strategies || 10} strategies × ${syms.length} symbols × ${tfs.length} candle sizes` : "No test has finished yet",
     `<button class="btn pri" ${run ? "disabled" : ""} onclick="act('/api/backtest/run',{},'Backtest started')">${run ? "Running " + d.done + "/" + d.total : "Run backtest now"}</button>`);
+  h += `<div class="lkpis">${kp("PROVEN SETUPS", nProven, "of " + tot + " tests", nProven ? "ok" : "")}${kp("STRATEGIES TESTED", R.n_strategies || 10, "plus the old score entries for comparison")}${kp("HISTORY", days + " days", nCt ? nCt + " of " + tot + " tests on cTrader candles" : "Yahoo candles")}${kp("STATE", esc(d.state), d.error ? esc(d.error) : (d.errors && d.errors.length ? d.errors.length + " tests skipped" : "re-tests every 2 days"), run ? "acc" : "")}</div>`;
+  const cell = (r) => {
+    if (!r) return `<div class="hc na">–</div>`;
+    if (r.error) return `<div class="hc na" title="${esc(r.error)}">–</div>`;
+    const v = r.best ? r.best.test.exp : null;
+    if (v == null) return `<div class="hc na" title="nothing earned on the first 60%">–</div>`;
+    const a = Math.min(1, Math.abs(v) / 0.25), bg = Math.abs(v) < 0.03 ? "#2a2a2f" : v > 0 ? `rgba(42,143,102,${0.35 + a * 0.65})` : `rgba(168,67,63,${0.3 + a * 0.7})`;
+    const on = sel && sel.symbol === r.symbol && sel.tf === r.tf;
+    return `<button class="hc ${r.ok ? "pv" : ""} ${on ? "sel" : ""}" style="background:${bg}" onclick="labPick('${r.symbol}',${r.tf})" title="${esc(r.symbol)} ${tfName(r.tf)}: ${esc(r.best.strategy)}">${signed(v, 2)}</button>`;
+  };
+  h += `<div class="lgrid"><section class="card lmap"><div class="lh"><b>Edge map · average R per trade on unseen data</b><span class="lleg"><i style="background:#a8433f"></i>loses<i style="background:#2a2a2f"></i>flat<i style="background:#2a8f66"></i>earns<i class="ring"></i>proven</span></div>
+    <div class="hrow hhead"><span></span>${tfs.map((t) => `<span class="mono">${tfName(t)}</span>`).join("")}</div>
+    ${syms.map((sy) => `<div class="hrow"><b>${esc(sy)}</b>${tfs.map((t) => cell((by[sy] || {})[t])).join("")}</div>`).join("") || '<p class="mute">No results yet. Press Run backtest now: it runs on the server and takes several minutes.</p>'}
+    <p class="mute" style="font-size:11px;margin:10px 0 0">Each cell is the best setup chosen on the first 60% of ${R.history_days ? "about " + R.history_days + " days of" : ""} candles and judged on the last 40% it never saw. Spread is paid on every trade. Click a cell for its proof.</p></section>`;
+  let side = "";
+  if (sel && !sel.error) {
+    const b = sel.best, t = b && b.test, need = sel.source === "ctrader" ? R.min_days_ctrader : (R.min_days_yahoo || {})[sel.tf] || 180, mt = sel.tf >= 60 ? R.min_t : R.min_t_fast;
+    const ck = (ok, label, val) => `<div class="pk"><i class="mk ${ok ? "g" : "r"}">${ok ? "✓" : "✕"}</i><span>${label}</span><b class="mono">${val}</b></div>`;
+    side += `<section class="card"><div class="lh"><b>${esc(sel.symbol)} · ${b ? esc(b.strategy) : "no setup"} · ${tfName(sel.tf)}</b><span class="pill ${sel.ok ? "buy" : "none"}">${sel.ok ? "PROVEN" : "NOT PROVEN"}</span></div>
+      ${b ? `<div class="mute" style="font-size:12px">stop ${b.stop_k} ATR · target ${b.rr}× · ${b.session === "all" ? "all hours" : "London/NY only"} · ${esc(sel.source || "")} candles</div>
+      <div class="lab" style="margin-top:10px">PROOF CHECKLIST</div>
+      ${ck(sel.days >= need, `History covers ${need}+ days`, sel.days + " d")}${ck(t.n >= R.min_test, `Unseen trades (need ${R.min_test})`, t.n)}${ck(t.exp >= R.min_exp, `Average per trade (need ${R.min_exp}R)`, signed(t.exp, 2) + "R")}
+      ${ck(t.pf >= R.min_pf, `Profit factor (need ${R.min_pf})`, num(t.pf, 2))}${ck((t.t || 0) >= mt, `Luck score t (need ${mt})`, num(t.t, 2))}${ck(sel.share_positive_test >= R.min_robust, `Neighbouring settings also earn (need ${Math.round(R.min_robust * 100)}%)`, Math.round(sel.share_positive_test * 100) + "%")}` : '<p class="mute">Nothing earned on the first 60% of the data, so there is nothing to prove.</p>'}</section>`;
+    if (b) side += `<section class="card"><div class="lh"><b>Win-chance range</b></div><div class="mute" style="font-size:11px;margin-bottom:8px">From ${t.n} unseen trades. A range, not one number.</div>${rangeBar(t, b.rr)}</section>`;
+  }
+  h += `<div class="lside">${side}</div></div>`;
   h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Proven only</b><div class="mute" style="font-size:12px">On: only symbols with a proven setup trade; every other symbol stays out. Off: symbols with no proven setup still trade on the score rules, marked UNPROVEN.</div></div>${swBtn(d.proven_only, "Proven only", "/api/proven-only", `{on:${!d.proven_only}}`)}</div></div></section>`;
-  h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Use proven setups where they exist</b><div class="mute" style="font-size:12px">On: a symbol with a proven setup trades only that setup, on its candle size; a symbol with none yet still trades on the score rules and is marked UNPROVEN. Off: score rules only.</div></div>${swBtn(d.strategy_mode, "Strategy mode", "/api/strategy-mode", `{on:${!d.strategy_mode}}`, d.strategy_mode ? "Turn strategy mode OFF? The old score-only entries (which lost money) trade again." : "")}</div>
-    <div class="note">Status: <b>${esc(d.state)}</b>${d.finished ? " · finished " + hm(d.finished) : ""}${d.error ? " · " + esc(d.error) : ""}. Live now: <b class="acc">${Object.keys(live).length}</b> symbol(s) cleared to trade${Object.keys(live).length ? ": " + Object.entries(live).map(([k, v]) => `${esc(k)} ${esc(v.strategy)} ${v.tf}m`).join(", ") : ". Nothing has been proven yet, so every symbol trades on the score rules (marked UNPROVEN)"}.</div>
-    <p class="mute" style="font-size:12px;margin:8px 0 0">A backtest is evidence, not a promise: markets change, and testing many setups always turns up some that look good by luck. That is why a setup must also earn on the unseen 40%, with enough trades. It re-runs by itself every 2 days and whenever the rules change; results for the old score-style entries on the same data are shown for comparison.</p></div></section>`;
-  h += `<section class="card"><div class="tw"><table style="min-width:980px"><thead><tr><th>Symbol</th><th>Candles</th><th>Best setup (picked on the first 60%)</th><th>First 60%</th><th>Unseen 40%</th><th>Old entries, unseen</th><th class="r">Verdict</th></tr></thead><tbody>
-    ${rows.map((r) => { const b = r.best; return `<tr><td><b>${esc(r.symbol)}</b></td><td class="mono">${r.tf}m</td><td>${b ? `${esc(b.strategy)} · stop ${b.stop_k} ATR · target ${b.rr}× · ${b.session === "all" ? "all hours" : "London/NY"}` : '<span class="mute">nothing earned on the first 60%</span>'}</td>
+  h += `<section class="card"><div class="pad"><div class="krow big"><div><b>Use proven setups where they exist</b><div class="mute" style="font-size:12px">On: a symbol with a proven setup trades only that setup, on its candle size. Off: score rules only.</div></div>${swBtn(d.strategy_mode, "Strategy mode", "/api/strategy-mode", `{on:${!d.strategy_mode}}`, d.strategy_mode ? "Turn strategy mode OFF? The old score-only entries (which lost money) trade again." : "")}</div>
+    <div class="note">Live now: <b class="acc">${Object.keys(live).length}</b> symbol(s) cleared to trade${Object.keys(live).length ? ": " + Object.entries(live).map(([k, v]) => `${esc(k)} ${esc(v.strategy)} ${tfName(v.tf)}`).join(", ") : ". Nothing is proven yet, so with Proven only ON nothing trades"}.</div>
+    <p class="mute" style="font-size:12px;margin:8px 0 0">A backtest is evidence, not a promise: markets change, and testing many setups always turns up some that look good by luck. That is why a setup must also earn on the unseen 40%, with enough trades and a luck score above the bar.</p></div></section>`;
+  h += `<details class="card ltab"><summary>All results (${rows.length})</summary><div class="tw"><table style="min-width:980px"><thead><tr><th>Symbol</th><th>Candles</th><th>Best setup (picked on the first 60%)</th><th>First 60%</th><th>Unseen 40%</th><th>Old entries, unseen</th><th class="r">Verdict</th></tr></thead><tbody>
+    ${rows.slice().sort((a, b) => a.symbol.localeCompare(b.symbol) || a.tf - b.tf).map((r) => { const b = r.best, pf = (t) => (t ? `${t.n} trades · ${num(t.win, 0)}% win · ${t.exp >= 0 ? "+" : ""}${num(t.exp, 2)}R · PF ${num(t.pf, 2)}${t.t != null ? " · t " + num(t.t, 1) : ""}` : "–");
+      return `<tr><td><b>${esc(r.symbol)}</b></td><td class="mono">${tfName(r.tf)}</td><td>${b ? `${esc(b.strategy)} · stop ${b.stop_k} ATR · target ${b.rr}× · ${b.session === "all" ? "all hours" : "London/NY"}` : '<span class="mute">nothing earned on the first 60%</span>'}</td>
       <td class="mono">${b ? pf(b.train) : "–"}</td><td class="mono ${b && b.test.exp > 0 ? "ok" : "bad"}">${b ? pf(b.test) : "–"}</td><td class="mono mute">${pf(r.baseline_test)}</td>
-      <td class="r">${r.ok ? '<span class="pill buy">PROVEN</span>' : '<span class="pill none">not proven</span>'}</td></tr>`; }).join("") || '<tr><td colspan="7" class="mute">No results yet. Press Run backtest now: it takes a few minutes and runs on the server.</td></tr>'}</tbody></table></div></section>`;
+      <td class="r">${r.ok ? '<span class="pill buy">PROVEN</span>' : '<span class="pill none">not proven</span>'}</td></tr>`; }).join("")}</tbody></table></div>
+    ${d.errors && d.errors.length ? `<div class="pad mute" style="font-size:12px">Skipped: ${d.errors.slice(0, 12).map(esc).join(" · ")}${d.errors.length > 12 ? " · …" : ""}</div>` : ""}</details>`;
   $app.innerHTML = h;
   clearTimeout(btTimer);
   if (run) btTimer = setTimeout(() => { if (pageName() === "strategies") render(); }, 4000);

@@ -224,3 +224,25 @@ def test_paper_is_gone_and_its_leftovers_are_purged_once():
         assert s.scalars(select(Signal).where(Signal.venue == "paper")).first() is None
         assert s.scalars(select(Position).where(Position.venue == "demo", Position.ticket == 777002)).first() is not None   # demo history is kept
     assert kv_get("paper_removed") is True and not kv_get("paper_state")
+
+
+def test_stop_and_target_of_an_open_trade_can_be_moved_by_hand():
+    import pytest
+    from app import broker, engine, venues
+    from app.broker import BrokerError
+    from app.db import Position, session
+    from sqlalchemy import select
+
+    venues.set_venue("demo", on=True)
+    engine.resume() if hasattr(engine, "resume") else None
+    t = engine.manual_ticket("demo", "XAUUSD", "BUY")
+    r = engine.manual_trade("demo", "XAUUSD", "BUY", t["lots"], t["sl"], t["tp"])
+    px = broker.get_broker("demo").tick("XAUUSD")["bid"]
+    out = engine.set_levels(r["ticket"], "demo", px - 7, px + 15)
+    with session() as s:
+        p = s.scalars(select(Position).where(Position.ticket == r["ticket"])).one()
+    assert (p.sl, p.tp, p.sl0) == (out["sl"], out["tp"], out["sl"]) and p.sl < px < p.tp
+    with pytest.raises(BrokerError, match="stop must be below"):
+        engine.set_levels(r["ticket"], "demo", px + 3, px + 15)
+    with pytest.raises(BrokerError, match="not open"):
+        engine.set_levels(999999, "demo", px - 7, px + 15)
