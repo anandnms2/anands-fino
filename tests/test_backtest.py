@@ -85,3 +85,35 @@ def test_session_range_breakouts_fire_once_after_the_range():
     df = pd.DataFrame({"time": t, "open": c, "high": c + 0.5, "low": c - 0.5, "close": c})
     sg = strategies.orb_london(df)
     assert sg.iloc[8] == 1 and sg.abs().sum() == 1
+
+
+def _fake_candles(days: int, tf: int = 60) -> pd.DataFrame:
+    n = days * 24 * 60 // tf
+    t = np.arange(n) * tf * 60 + 1_700_000_000
+    c = 1.1 + np.cumsum(np.random.default_rng(1).normal(0, 0.0004, n))
+    return pd.DataFrame({"time": t, "open": c, "high": c + 0.0003, "low": c - 0.0003, "close": c, "volume": 1})
+
+
+def test_history_comes_from_ctrader_first_and_falls_back_to_yahoo(monkeypatch):
+    from app import broker as brk
+
+    class Fake:
+        def connect(self):
+            pass
+
+        def history(self, sym, tf, days, max_pages=0):
+            assert days >= 180
+            return _fake_candles(days, tf), 3
+
+    monkeypatch.setattr(brk, "get_broker", lambda venue="demo": Fake())
+    df = backtest.fetch_history("EURUSD", 60)
+    assert df.attrs["source"] == "ctrader" and (df["time"].iloc[-1] - df["time"].iloc[0]) / 86400 >= 170
+    assert backtest.test_symbol("EURUSD", 60, df)["source"] == "ctrader"
+
+    class Short(Fake):
+        def history(self, sym, tf, days, max_pages=0):
+            return _fake_candles(60, tf), 1
+
+    monkeypatch.setattr(brk, "get_broker", lambda venue="demo": Short())
+    monkeypatch.setattr(backtest, "fetch_yahoo", lambda s, tf: _fake_candles(200, tf))
+    assert backtest.fetch_history("EURUSD", 60).attrs["source"] == "yahoo"

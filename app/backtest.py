@@ -13,7 +13,7 @@ from .config import get_settings
 from .db import kv_get, kv_set, log, utcnow
 from .history import UA, YAHOO, default_spec
 
-RULES_VERSION = 4               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
+RULES_VERSION = 5               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
 TIMEFRAMES = (1, 3, 5, 15, 30, 60)   # minutes. Yahoo keeps about 30 days of 1m (3m is built from it), 60 days of 5m/15m/30m and 2 years of 1h
 # days of history a test must cover before it can prove anything: short windows are allowed for the fast candles, hourly must cover 6 months
@@ -47,7 +47,49 @@ def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return out.dropna().reset_index(drop=True)
 
 
+HISTORY_DAYS = 185             # asked from cTrader: 180 days of candles plus a few for weekends
+MIN_DAYS_CTRADER = 170         # a cTrader series must cover this many calendar days, else the test falls back to Yahoo
+CTRADER_TFS = {1, 3, 5, 15, 30, 60}
+
+
+def _history_venue() -> str:
+    from . import venues
+    for v in ("demo", "live"):
+        if venues.venue_cfg(v)["on"]:
+            return v
+    return "demo"
+
+
+def fetch_ctrader(symbol: str, tf: int, days: int = HISTORY_DAYS) -> pd.DataFrame:
+    """180 days of the broker's own candles for this symbol and candle size (read-only market data, same account the app trades on)."""
+    from .broker import get_broker
+    broker = get_broker(_history_venue())
+    if not hasattr(broker, "history"):
+        raise RuntimeError("this broker has no history call")
+    broker.connect()
+    df, _ = broker.history(get_settings().broker_symbol(symbol), tf, days, max_pages=120)
+    if len(df) < 400:
+        raise RuntimeError(f"cTrader returned only {len(df)} candles")
+    df = df[["time", "open", "high", "low", "close"]].dropna().reset_index(drop=True)
+    df.attrs["source"] = "ctrader"
+    return df
+
+
 def fetch_history(symbol: str, tf: int) -> pd.DataFrame:
+    """cTrader first (180 days, broker prices); Yahoo only if cTrader cannot supply enough, then the shorter Yahoo day limits apply."""
+    if tf in CTRADER_TFS:
+        try:
+            df = fetch_ctrader(symbol, tf)
+            if (float(df["time"].iloc[-1]) - float(df["time"].iloc[0])) / 86400 >= MIN_DAYS_CTRADER:
+                return df
+        except Exception as e:  # noqa: BLE001
+            log(f"cTrader history for {symbol} {tf}m unavailable ({e}); using Yahoo", "warn")
+    df = fetch_yahoo(symbol, tf)
+    df.attrs["source"] = "yahoo"
+    return df
+
+
+def fetch_yahoo(symbol: str, tf: int) -> pd.DataFrame:
     last = "no data"
     for ysym in YAHOO.get(symbol, [f"{symbol}=X"]):
         try:
@@ -82,9 +124,14 @@ def simulate(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread:
     s = sig.to_numpy(int)
     out, i, n = [], max(lo, 210), len(df)
     hi = min(hi, n - 2)
+    nz = np.flatnonzero(s)
     while i < hi:
+        k = np.searchsorted(nz, i)          # jump straight to the next signal instead of stepping through every candle
+        if k >= len(nz) or nz[k] >= hi:
+            break
+        i = int(nz[k])
         d = s[i]
-        if d == 0 or not np.isfinite(atr[i]) or atr[i] <= 0:
+        if not np.isfinite(atr[i]) or atr[i] <= 0:
             i += 1
             continue
         stop = stop_k * atr[i]
@@ -132,7 +179,8 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     df = fetch_history(symbol, tf) if df is None else df
     spread = float(default_spec(symbol)["spread"])
     days = (float(df["time"].iloc[-1]) - float(df["time"].iloc[0])) / 86400
-    need = MIN_DAYS_BY_TF.get(tf, MIN_DAYS)
+    src = df.attrs.get("source", "yahoo")
+    need = MIN_DAYS_CTRADER if src == "ctrader" else MIN_DAYS_BY_TF.get(tf, MIN_DAYS)
     if days < need:
         raise RuntimeError(f"{symbol} {tf}m history covers only {days:.0f} days, {need} needed")
     cut = int(len(df) * 0.6)
@@ -150,7 +198,7 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     base = bl[0]["test"] if bl else None
     # robustness is judged among the winning strategy's own settings, so adding more strategies cannot dilute it
     tested = [x for x in results if x["test"]["n"] >= MIN_TEST and (best is None or x["strategy"] == best["strategy"])]
-    row = {"symbol": symbol, "tf": tf, "candles": len(df), "days": round(days), "baseline_test": base, "best": best,
+    row = {"symbol": symbol, "tf": tf, "source": src, "candles": len(df), "days": round(days), "baseline_test": base, "best": best,
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
         t = best["test"]
