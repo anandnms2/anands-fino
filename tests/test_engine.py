@@ -287,3 +287,21 @@ def test_strategy_trades_keep_their_tested_exits():
         s.add_all([a, b]); s.commit()
         ia, ib = a.id, b.id
     assert engine.is_strategy_trade(ia) and not engine.is_strategy_trade(ib) and not engine.is_strategy_trade(None)
+
+
+def test_proven_only_toggle_blocks_unproven_symbols(monkeypatch):
+    from app.db import kv_set
+
+    kv_set("strategy_mode", True); kv_set("proven_only", True)
+    force_buy(monkeypatch); yes(monkeypatch)
+    try:
+        engine.run_cycle(force=True)
+        assert brk.get_broker("demo").orders == []          # nothing is proven, so nothing trades
+        with session() as s:
+            sigs = s.scalars(select(Signal)).all()
+            assert sigs and all(x.status == "no_trade" and "Proven only" in x.reason for x in sigs)
+        kv_set("proven_only", False)
+        engine.run_cycle(force=True)
+        assert brk.get_broker("demo").orders                 # switched off: they trade again on the score rules
+    finally:
+        kv_set("proven_only", False)

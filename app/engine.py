@@ -297,7 +297,9 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
         strat_note, st_ = None, strats.get(sym)
         if strat_mode:   # trade only what has been proven on past data, on the candle size it was proven on
             if st_ is None:
-                pass   # nothing proven yet for this symbol: it still trades on the normal score rules, and is marked UNPROVEN
+                if proven_only():   # the toggle: no proven setup, no trade
+                    comb, strat_note = {**comb, "bias": "NONE"}, "Proven only is ON and no strategy has been proven on past data for this symbol (see the Strategies page)"
+                # otherwise it still trades on the normal score rules, and is marked UNPROVEN
             else:
                 sg_ = int(strategies.signal(dfs[sym], st_["strategy"], st_["session"]).iloc[-1])
                 if sg_ == 0:
@@ -440,9 +442,14 @@ def _analyse(cfg: Settings, cycle_id: str, tf: int, vctx: dict, force: bool) -> 
     return results
 
 
+def proven_only() -> bool:
+    """Off unless switched on: symbols with no proven setup do not trade at all (otherwise they trade on the score rules, marked UNPROVEN)."""
+    return kv_get("proven_only") is True
+
+
 def strategy_mode() -> bool:
-    """On unless switched off: trade only setups proven on past data. Off is the old score-only mode."""
-    return kv_get("strategy_mode") is not False
+    """On unless switched off: symbols with a proven setup trade that setup. Off is the old score-only mode, unless Proven only is on."""
+    return kv_get("strategy_mode") is not False or proven_only()
 
 
 def _strategy_levels(side: str, st: dict, tech: dict, tick: dict, digits: int) -> dict:
@@ -1033,7 +1040,7 @@ def state() -> dict:
         "venues": {v: venue_state(v) for v in V.VENUES},
         "risk": {"daily_loss_cap_pct": cfg.daily_loss_cap_pct, "max_open": cfg.max_open, "max_loss_streak": cfg.max_loss_streak,
                  "risk_per_trade_pct": cfg.risk_per_trade_pct, "open_risk_cap_pct": cfg.max_open * cfg.risk_per_trade_pct, "min_rr": cfg.min_rr, "custom": bool(risk_overrides())},
-        "tune": tune_table(), "strategy_mode": strategy_mode(), "strategies": kv_get("strategies") or {}, "bt_state": (kv_get("backtest") or {}).get("state", "never run"),
+        "tune": tune_table(), "strategy_mode": strategy_mode(), "proven_only": proven_only(), "strategies": kv_get("strategies") or {}, "bt_state": (kv_get("backtest") or {}).get("state", "never run"),
         "next_cycle": iso(nxt), "market_open": market_open(),
         "usage": {"claude": usage("claude"), "claude_cap": cfg.claude_max_calls_per_day,
                   "freellm": usage("freellm"), "freellm_cap": cfg.freellmapi_max_calls_per_day},

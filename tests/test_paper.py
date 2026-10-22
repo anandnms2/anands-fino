@@ -136,7 +136,15 @@ def test_paper_and_demo_trade_in_parallel(feed, monkeypatch):
     for p in engine.open_positions_view("paper"):
         engine.close_position(p["ticket"], "paper")
     engine.reconcile()
-    assert c.post("/api/paper/reset", auth=AUTH, headers=HDR).status_code == 200
+    with session() as s:
+        assert s.scalars(select(Position).where(Position.venue == "paper")).first() is not None   # history exists before the reset
+        demo_pos = len(s.scalars(select(Position).where(Position.venue == "demo")).all())
+    r = c.post("/api/paper/reset", auth=AUTH, headers=HDR)
+    assert r.status_code == 200 and r.json()["trades_deleted"] >= 1
+    with session() as s:   # paper history is gone, demo history is untouched
+        assert s.scalars(select(Position).where(Position.venue == "paper")).first() is None
+        assert s.scalars(select(Signal).where(Signal.venue == "paper")).first() is None
+        assert len(s.scalars(select(Position).where(Position.venue == "demo")).all()) == demo_pos
     assert c.get("/", auth=AUTH).status_code == 200
 
 

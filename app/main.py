@@ -524,11 +524,22 @@ def api_paper_reset():
 
     if engine.open_positions_view("paper"):
         raise HTTPException(400, "Close the open paper positions first")
+    from sqlalchemy import delete
+
     get_paper().reset()
+    with session() as s:   # the history goes too: closed paper trades, and the signals and journal lines behind them
+        ids = list(s.scalars(select(Signal.id).where(Signal.venue == "paper")))
+        n_pos = s.execute(delete(Position).where(Position.venue == "paper")).rowcount
+        if ids:
+            for k in range(0, len(ids), 500):
+                s.execute(delete(Activity).where(Activity.signal_id.in_(ids[k:k + 500])))
+        n_sig = s.execute(delete(Signal).where(Signal.venue == "paper")).rowcount
+        s.commit()
+    engine._strat_sig.clear()
     venues.set_loss_streak("paper", 0)
     kv_set("day_start:paper", None)
-    log("Paper account reset", "warn")
-    return {"ok": True}
+    log(f"Paper account reset: {n_pos} trades and {n_sig} signals deleted", "warn")
+    return {"ok": True, "trades_deleted": n_pos, "signals_deleted": n_sig}
 
 
 @app.post("/api/tune")
@@ -577,7 +588,7 @@ def api_backtest():
     from . import backtest
 
     st = backtest.status()
-    return {**st, "strategy_mode": engine.strategy_mode(), "live_set": kv_get("strategies") or {}}
+    return {**st, "strategy_mode": engine.strategy_mode(), "proven_only": engine.proven_only(), "live_set": kv_get("strategies") or {}}
 
 
 @app.post("/api/backtest/run")
@@ -594,6 +605,14 @@ def api_strategy_mode(body: dict = Body(...)):
     kv_set("strategy_mode", on)
     log("Strategy mode " + ("ON: only setups proven on past data trade" if on else "OFF: the old score-only entries trade"), "warn")
     return {"strategy_mode": on}
+
+
+@app.post("/api/proven-only")
+def api_proven_only(body: dict = Body(...)):
+    on = bool(body.get("on"))
+    kv_set("proven_only", on)
+    log("Proven only " + ("ON: symbols with no proven setup do not trade" if on else "OFF: symbols with no proven setup trade on the score rules (UNPROVEN)"), "warn")
+    return {"proven_only": on}
 
 
 @app.post("/api/paper/balance")
