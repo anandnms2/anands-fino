@@ -13,7 +13,7 @@ from .config import get_settings
 from .db import kv_get, kv_set, log, utcnow
 from .history import UA, YAHOO, default_spec
 
-RULES_VERSION = 5               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
+RULES_VERSION = 6               # bump when the strategies or the proof rule change: the server then re-tests everything by itself on its next start
 RANGE = {5: ("5m", "60d"), 15: ("15m", "60d"), 30: ("30m", "60d"), 60: ("60m", "730d")}
 TIMEFRAMES = (1, 3, 5, 15, 30, 60)   # minutes. Yahoo keeps about 30 days of 1m (3m is built from it), 60 days of 5m/15m/30m and 2 years of 1h
 # days of history a test must cover before it can prove anything: short windows are allowed for the fast candles, hourly must cover 6 months
@@ -116,7 +116,7 @@ def fetch_yahoo(symbol: str, tf: int) -> pd.DataFrame:
     raise RuntimeError(f"no history for {symbol} {tf}m ({last})")
 
 
-def simulate(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread: float, lo: int, hi: int) -> np.ndarray:
+def simulate(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread: float, lo: int, hi: int, log: list | None = None) -> np.ndarray:
     """Net result of every trade in R (1R = the stop), for signals on candles lo..hi-1. One trade at a time, entry at the next open,
     spread paid on entry, a stop and a target that touch in the same candle count as the stop (the pessimistic order)."""
     o, h, l, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
@@ -160,6 +160,8 @@ def simulate(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread:
             j = min(n - 1, i + MAX_BARS)
             res = (c[j] - hs - entry) / stop if d > 0 else (entry - (c[j] + hs)) / stop
         out.append(res)
+        if log is not None:
+            log.append((int(df["time"].iloc[i + 1]), int(d), float(res)))
         i = j + 1
     return np.array(out)
 
@@ -172,6 +174,22 @@ def stats(r: np.ndarray) -> dict:
     sd = float(r.std(ddof=1)) if n > 1 else 0.0
     t = float(r.mean() / (sd / n ** 0.5)) if sd > 0 else 0.0     # how many standard errors the average result sits above zero: small means it could be luck
     return {"t": round(t, 2), "n": n, "win": round(float((r > 0).mean() * 100), 1), "exp": round(float(r.mean()), 3), "pf": round(float(w / lo) if lo > 0 else 9.99, 2), "net": round(float(r.sum()), 2)}
+
+
+def report(df: pd.DataFrame, sig: pd.Series, stop_k: float, rr: float, spread: float, cut: int, days: float) -> dict:
+    """The unseen-part record of one setup: equity curve in R, drawdown, Sharpe and the trade list."""
+    lg: list = []
+    r = simulate(df, sig, stop_k, rr, spread, cut, len(df), log=lg)
+    if len(r) < 2:
+        return {}
+    eq = np.cumsum(r)
+    peak = np.maximum.accumulate(np.r_[0.0, eq])[1:]
+    sd = float(r.std(ddof=1))
+    per_year = len(r) / max(days * 0.4 / 365, 1e-9)
+    step = max(1, len(eq) // 120)
+    return {"net_r": round(float(eq[-1]), 2), "max_dd_r": round(float((peak - eq).max()), 2), "sharpe": round(float(r.mean() / sd * per_year ** 0.5), 2) if sd > 0 else 0.0,
+            "curve": [round(float(x), 2) for x in eq[::step]] + ([round(float(eq[-1]), 2)] if (len(eq) - 1) % step else []),
+            "trades": [[t, d, round(x, 2)] for t, d, x in lg[-60:]], "n": len(r)}
 
 
 def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
@@ -201,6 +219,7 @@ def test_symbol(symbol: str, tf: int, df: pd.DataFrame | None = None) -> dict:
     row = {"symbol": symbol, "tf": tf, "source": src, "candles": len(df), "days": round(days), "baseline_test": base, "best": best,
            "share_positive_test": round(sum(x["test"]["exp"] > 0 for x in tested) / len(tested), 2) if tested else 0.0, "ok": False}
     if best:
+        row["report"] = report(df, S.signal(df, best["strategy"], best["session"]), best["stop_k"], best["rr"], spread, cut, days)
         t = best["test"]
         row["ok"] = t["n"] >= MIN_TEST_STRONG and t["exp"] >= OK_TEST_EXPECTANCY and t["pf"] >= OK_TEST_PF and t.get("t", 0) >= (MIN_T if tf >= 60 else MIN_T_FAST) and row["share_positive_test"] >= MIN_ROBUST
     return row

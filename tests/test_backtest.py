@@ -70,7 +70,7 @@ def test_resample_builds_three_minute_candles_and_short_history_rules():
 
 def test_every_strategy_runs_and_never_looks_ahead():
     df = _bars(1800, seed=11, drift=0.0003)
-    assert len([n for n in strategies.STRATEGIES if n != strategies.BASELINE]) == 10
+    assert len([n for n in strategies.STRATEGIES if n != strategies.BASELINE]) == 12
     for name in strategies.STRATEGIES:
         full = strategies.signal(df, name)
         cut = strategies.signal(df.iloc[:1000].reset_index(drop=True), name)
@@ -135,3 +135,14 @@ def test_a_dead_run_is_reported_as_interrupted_and_progress_saves_survive_a_lock
     monkeypatch.setattr(backtest.time, "sleep", lambda s: None)
     backtest._save("backtest", {"state": "running"})
     assert len(calls) == 3
+
+
+def test_smart_money_strategies_fire_and_the_report_has_drawdown_sharpe_curve_and_trades():
+    df = _bars(4600, seed=5, drift=0.0002)
+    for name in ("fvg", "sweep"):
+        assert (strategies.signal(df, name) != 0).sum() > 5, name
+    row = backtest.test_symbol("EURUSD", 60, df)
+    if row["best"]:
+        rp = row["report"]
+        assert rp["max_dd_r"] >= 0 and len(rp["curve"]) >= 2 and rp["n"] == row["best"]["test"]["n"] and len(rp["trades"]) <= 60
+        assert abs(rp["net_r"] - row["best"]["test"]["net"]) < 0.02

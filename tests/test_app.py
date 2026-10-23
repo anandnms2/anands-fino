@@ -246,3 +246,19 @@ def test_stop_and_target_of_an_open_trade_can_be_moved_by_hand():
         engine.set_levels(r["ticket"], "demo", px + 3, px + 15)
     with pytest.raises(BrokerError, match="not open"):
         engine.set_levels(999999, "demo", px - 7, px + 15)
+
+
+def test_flatten_all_halts_and_closes_every_open_trade():
+    from app import engine, venues
+    from app.db import Position, session
+    from sqlalchemy import select
+
+    venues.set_venue("demo", on=True)
+    for side in ("BUY", "SELL"):
+        t = engine.manual_ticket("demo", "XAUUSD", side)
+        engine.manual_trade("demo", "XAUUSD" if side == "BUY" else "EURUSD", side, 0.01, *( (t["sl"], t["tp"]) if side == "BUY" else (engine.manual_ticket("demo", "EURUSD", "SELL")["sl"], engine.manual_ticket("demo", "EURUSD", "SELL")["tp"]) ))
+        engine.resume()
+    r = engine.flatten_all()
+    assert len(r["closed"]) == 2 and not r["failed"] and engine.halted()["on"]
+    with session() as s:
+        assert not s.scalars(select(Position).where(Position.status == "open")).all()

@@ -397,6 +397,12 @@ def api_halt(body: dict = Body(default={})):
     return engine.halted()
 
 
+@app.post("/api/flatten")
+def api_flatten():
+    """Halt trading and close every open trade on every venue."""
+    return engine.flatten_all()
+
+
 @app.post("/api/resume")
 def api_resume():
     engine.resume()

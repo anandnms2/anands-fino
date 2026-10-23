@@ -626,6 +626,20 @@ def reject(signal_id: int) -> None:
         log(f"{sig.symbol}: signal rejected by you", "info", sig.symbol, sig.id)
 
 
+def flatten_all() -> dict:
+    """Panic switch: halt everything first (so nothing new opens), then close every open trade on every venue. Reports what closed and what failed."""
+    halt("Flatten all pressed")
+    closed, failed = [], []
+    for p in open_positions_view():
+        try:
+            close_position(p["ticket"], p["venue"])
+            closed.append(f"{p['symbol']} #{p['ticket']}")
+        except Exception as e:  # noqa: BLE001  one stubborn trade must not stop the rest from closing
+            failed.append(f"{p['symbol']} #{p['ticket']}: {e}")
+    log(f"FLATTEN ALL: closed {len(closed)}, failed {len(failed)}", "error" if failed else "warn")
+    return {"closed": closed, "failed": failed}
+
+
 def close_position(ticket: int, venue: str = "demo") -> None:
     cfg = get_settings()
     broker = get_broker(venue)

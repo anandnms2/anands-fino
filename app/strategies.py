@@ -154,8 +154,52 @@ def donchian55(df: pd.DataFrame, p: dict | None = None) -> pd.Series:
     return buy.astype(int) - sell.astype(int)
 
 
+# ---------------------------------------------------------------- smart-money style strategies
+def fvg(df: pd.DataFrame, p: dict | None = None) -> pd.Series:
+    """Fair value gap retest: a 3-candle gap (candle 3 never trades back into candle 1's far edge) at least half an ATR wide is a zone; the first
+    time price dips back into it within 20 candles and closes back out in the trend direction (50 over 200) is the signal."""
+    import numpy as np
+
+    p = p or _prep(df)
+    h, l, c = (df[k].to_numpy(float) for k in ("high", "low", "close"))
+    a, up, dn = p["atr"].to_numpy(float), (p["e50"] > p["e200"]).to_numpy(), (p["e50"] < p["e200"]).to_numpy()
+    n = len(df)
+    out = np.zeros(n, dtype=int)
+    bull = bear = None          # (bottom, top, born) of the latest unused gap on each side
+    for i in range(2, n):
+        if np.isnan(a[i]):
+            continue
+        if l[i] > h[i - 2] and l[i] - h[i - 2] >= 0.5 * a[i]:
+            bull = (h[i - 2], l[i], i)
+        if h[i] < l[i - 2] and l[i - 2] - h[i] >= 0.5 * a[i]:
+            bear = (h[i], l[i - 2], i)
+        if bull is not None and i > bull[2]:
+            if i - bull[2] > 20 or c[i] < bull[0]:
+                bull = None
+            elif l[i] <= bull[1] and c[i] >= bull[1]:
+                out[i] = 1 if up[i] else 0
+                bull = None
+        if bear is not None and i > bear[2]:
+            if i - bear[2] > 20 or c[i] > bear[1]:
+                bear = None
+            elif h[i] >= bear[0] and c[i] <= bear[0]:
+                out[i] = -1 if dn[i] else out[i]
+                bear = None
+    return pd.Series(out, index=df.index)
+
+
+def sweep(df: pd.DataFrame, p: dict | None = None) -> pd.Series:
+    """Liquidity sweep: price pokes beyond the last 20 candles' low (or high) and closes back inside, in the outer half of its own candle."""
+    p = p or _prep(df)
+    lo, hi = p["l"].rolling(20).min().shift(1), p["h"].rolling(20).max().shift(1)
+    mid = (p["h"] + p["l"]) / 2
+    buy = (p["l"] < lo) & (p["c"] > lo) & (p["c"] > mid)
+    sell = (p["h"] > hi) & (p["c"] < hi) & (p["c"] < mid)
+    return buy.astype(int) - sell.astype(int)
+
+
 STRATEGIES = {"pullback": pullback, "breakout": breakout, "meanrev": meanrev, "macdturn": macdturn, "orb_london": orb_london, "asian_break": asian_break,
-              "squeeze": squeeze, "bbrev": bbrev, "supertrend": supertrend, "donchian55": donchian55, "stackstate": stackstate}
+              "squeeze": squeeze, "bbrev": bbrev, "supertrend": supertrend, "donchian55": donchian55, "fvg": fvg, "sweep": sweep, "stackstate": stackstate}
 BASELINE = "stackstate"   # not allowed to trade live: it only shows what the old style of entry earns on the same data
 SESSIONS = {"all": None, "london_ny": (7, 17)}   # UTC hours
 

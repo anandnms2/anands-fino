@@ -54,7 +54,7 @@ function scoreBar(score) {
 /* ------------------------------------------------------------ live state (terminal) */
 const $bar = document.getElementById("bar");
 const S = { an: {}, venue: (["demo", "live"].includes(localStorage.getItem("fv")) ? localStorage.getItem("fv") : "demo"), sym: localStorage.getItem("fs") || "", tf: 0, tab: "pos", px: {}, last: {}, dir: {}, live: {}, lat: -1,
-  st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
+  ind: (() => { try { return Object.assign({ ema: true, bb: false, fvg: false, rsi: false, macd: false }, JSON.parse(localStorage.getItem("fi") || "{}")); } catch (e) { return { ema: true, bb: false, fvg: false, rsi: false, macd: false }; } })(), cross: null, st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
 const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
 const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
 const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/strategies" ? "strategies" : h === "#/settings" ? "settings" : "terminal"; };
@@ -124,7 +124,8 @@ function renderBar() {
       <button class="chip chipbtn" title="Click to switch: ON = a symbol with no proven strategy does not trade" onclick="act('/api/proven-only',{on:${!st.proven_only}},'Proven only ${st.proven_only ? "OFF" : "ON"}')">Proven only <b class="${st.proven_only ? "ok" : "mute"}">${st.proven_only ? "ON" : "OFF"}</b></button>
       <span class="chip">Trailing <b class="${st.trail ? "ok" : "mute"}">${st.trail ? "ON" : "OFF"}</b></span>
       <span class="chip">Claude veto <b class="${st.claude_veto ? "ok" : "mute"}">${st.claude_veto ? "ON" : "OFF"}</b></span>
-      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}</div></div>
+      ${st.halted && st.halted.on ? `<button class="halt on" onclick="act('/api/resume',{},'Resumed')">RESUME</button>` : `<button class="halt" onclick="askAct('Halt all trading on every venue?','/api/halt','Halted')">HALT ALL</button>`}
+      <button class="halt flat" title="Close every open trade on every venue and halt trading" onclick="askAct('FLATTEN ALL: close every open trade on EVERY venue (including Live) at market and halt trading?','/api/flatten','Flattened: all trades closed, trading halted')">FLATTEN ALL</button></div></div>
     <div class="strip2" aria-label="Account">
       ${kpi("BALANCE", a ? "$" + num(a.balance, 2) : "–", a ? (a.demo ? "cTrader demo" : "cTrader live") : "not connected")}
       ${kpi("EQUITY", a ? "$" + num(a.equity, 2) : "–", a ? signed(a.day_pnl_pct, 2) + "% today" : "", "bar-eq")}
@@ -213,6 +214,7 @@ function renderHead() {
   const st = S.st, v = st.venues[S.venue] || {};
   $("chead").innerHTML = `<div class="ch-l"><b class="sym">${esc(S.sym)}</b>${stratBadge(S.sym)}<span class="mono big" id="hb">–</span><span class="mono mute" id="hs"></span></div>
     <div class="buysell"><button class="bs buy" onclick="openTicket('BUY')">BUY</button><button class="bs sell" onclick="openTicket('SELL')">SELL</button></div>
+    <div class="tfs inds" role="group" aria-label="Chart indicators">${[["ema", "EMA"], ["bb", "Bollinger"], ["fvg", "FVG"], ["rsi", "RSI"], ["macd", "MACD"]].map(([k, l]) => `<button aria-pressed="${!!S.ind[k]}" onclick="togInd('${k}')">${l}</button>`).join("")}</div>
     <div class="tfs" role="group" aria-label="Chart candle size">${st.timeframes.map((m) => `<button aria-pressed="${m === S.tf}" onclick="pickTf(${m})">${m === 60 ? "1h" : m + "m"}</button>`).join("")}</div>`;
   updateHead();
 }
@@ -224,6 +226,7 @@ window.openTrade = (venue, sym, tf) => {   // click an open trade: show its char
   if (was !== venue) { renderBar(); renderBottom(); }
   renderWatch(); renderHead(); renderSide(); loadCandles();
 };
+window.togInd = (k) => { S.ind[k] = !S.ind[k]; try { localStorage.setItem("fi", JSON.stringify(S.ind)); } catch (e) { /* private mode */ } renderHead(); queueDraw(); };
 window.pickTf = (m) => { S.tf = m; S.candleKey = ""; renderHead(); loadCandles(); };
 function updateHead() {
   const p = (S.px[S.venue] || {})[S.sym]; if (!p) return;
@@ -252,6 +255,24 @@ function updateLiveCandle() {
   else { last[4] = mid; last[2] = Math.max(last[2], mid); last[3] = Math.min(last[3], mid); }
   if (c.length > 400) c.shift();
 }
+const closesOf = (C) => C.map((c) => c[4]);
+function emaArr(v, k) { const a = 2 / (k + 1); let e = null; return v.map((x) => (e = e == null ? x : e + a * (x - e))); }
+function bbArr(C) { const c = closesOf(C); return c.map((_, i) => { if (i < 19) return null; const w = c.slice(i - 19, i + 1), m = w.reduce((a, b) => a + b, 0) / 20, sd = Math.sqrt(w.reduce((a, b) => a + (b - m) * (b - m), 0) / 20); return [m - 2 * sd, m, m + 2 * sd]; }); }
+function rsiArr(C, n = 14) { const c = closesOf(C), out = c.map(() => null); let ag = 0, al = 0; for (let i = 1; i < c.length; i++) { const d = c[i] - c[i - 1], g = Math.max(d, 0), l = Math.max(-d, 0); if (i <= n) { ag += g / n; al += l / n; } else { ag = (ag * (n - 1) + g) / n; al = (al * (n - 1) + l) / n; } if (i >= n) out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al); } return out; }
+function macdArr(C) { const c = closesOf(C), m = emaArr(c, 12).map((x, i) => x - emaArr(c, 26)[i]); const sg = emaArr(m, 9); return m.map((x, i) => [x, sg[i], x - sg[i]]); }
+function fvgZones(C) {   // unfilled 3-candle gaps: [first index, bottom, top, bull?]
+  const out = [];
+  for (let i = 2; i < C.length; i++) {
+    const a = C.slice(Math.max(0, i - 14), i + 1).reduce((s, c) => s + (c[2] - c[3]), 0) / Math.min(15, i + 1);
+    let z = null;
+    if (C[i][3] > C[i - 2][2] && C[i][3] - C[i - 2][2] >= 0.5 * a) z = [i - 2, C[i - 2][2], C[i][3], true];
+    else if (C[i][2] < C[i - 2][3] && C[i - 2][3] - C[i][2] >= 0.5 * a) z = [i - 2, C[i][2], C[i - 2][3], false];
+    if (!z) continue;
+    let filled = false; for (let j = i + 1; j < C.length; j++) { if (z[3] ? C[j][4] < z[1] : C[j][4] > z[2]) { filled = true; break; } }
+    if (!filled) out.push(z);
+  }
+  return out.slice(-6);
+}
 function queueDraw() { if (S.drawQ) return; S.drawQ = true; requestAnimationFrame(() => { S.drawQ = false; drawChart(); }); }
 function openPos(sym) { return S.posd.open.find((p) => p.venue === S.venue && p.symbol === sym); }
 function drawChart() {
@@ -260,9 +281,10 @@ function drawChart() {
   if (!w || !h) return;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
   const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const np = (S.ind.rsi ? 1 : 0) + (S.ind.macd ? 1 : 0), PH = 78, hm = h - np * PH;
   const PAD = 76, slot = 8, n = Math.max(10, Math.floor((w - PAD - 12) / slot)), view = S.candles.slice(-n);
   const emaOf = (k) => { const a = 2 / (k + 1), out = []; let e = null; for (const c of S.candles) { e = e == null ? c[4] : e + a * (c[4] - e); out.push(e); } return out.slice(-view.length); };
-  const EMAS = S.candles.length > 60 ? [[20, "#F58A14"], [50, "#5AA9E6"], [200, "#B48CF2"]].map(([k, col]) => [k, col, emaOf(k)]) : [];
+  const EMAS = S.ind.ema && S.candles.length > 60 ? [[20, "#F58A14"], [50, "#5AA9E6"], [200, "#B48CF2"]].map(([k, col]) => [k, col, emaOf(k)]) : [];
   if (view.length < 2) { g.fillStyle = "#9C9EA6"; g.font = "13px Inter,sans-serif"; g.fillText("Loading candles…", 16, 28); return; }
   const P0 = openPos(S.sym), d = dig(S.sym), P = P0 && S.drag && S.drag.ticket === P0.ticket ? { ...P0, [S.drag.k]: S.drag.v } : P0;
   cv.style.touchAction = P0 ? "none" : "";
@@ -270,8 +292,8 @@ function drawChart() {
   if (P) { lo = Math.min(lo, P.tp, P.sl, P.entry); hi = Math.max(hi, P.tp, P.sl, P.entry, P.sl0 || P.sl); }
   const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
   if (S.drag) { lo = S.drag.lo; hi = S.drag.hi; }   // the scale stays put while a line is being dragged
-  S.geo = { lo, hi, h };
-  const Y = (v) => 8 + (1 - (v - lo) / (hi - lo)) * (h - 20), x0 = w - PAD - view.length * slot;
+  S.geo = { lo, hi, h: hm };
+  const Y = (v) => 8 + (1 - (v - lo) / (hi - lo)) * (hm - 20), x0 = w - PAD - view.length * slot;
   g.font = "11px 'JetBrains Mono',monospace"; g.textBaseline = "middle";
   for (let i = 0; i <= 5; i++) { const v = lo + ((hi - lo) * i) / 5, y = Y(v); g.strokeStyle = "#1a1a1f"; g.setLineDash([3, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#6c6e75"; g.fillText(v.toFixed(d), w - PAD + 6, y); }
   view.forEach((c, i) => {
@@ -281,6 +303,9 @@ function drawChart() {
   });
   EMAS.forEach(([k, col, arr]) => { g.strokeStyle = col; g.lineWidth = 1.2; g.beginPath(); arr.forEach((v, i) => { const x = x0 + i * slot + slot / 2; i ? g.lineTo(x, Y(v)) : g.moveTo(x, Y(v)); }); g.stroke(); g.lineWidth = 1; });
   EMAS.forEach(([k, col], i) => { g.fillStyle = col; g.textAlign = "left"; g.fillText("EMA " + k, 10 + i * 70, 16); });
+  const off = S.candles.length - view.length, X = (i) => x0 + i * slot + slot / 2;
+  if (S.ind.fvg) fvgZones(S.candles).forEach(([i0, bo, to, bull]) => { const xs = Math.max(0, X(i0 - off) - slot / 2); if (X(i0 - off) < 0 && i0 < off) return; g.fillStyle = bull ? "rgba(61,196,143,.16)" : "rgba(240,109,109,.16)"; g.fillRect(xs, Y(to), w - PAD - xs, Math.max(2, Y(bo) - Y(to))); g.fillStyle = bull ? "#3DC48F" : "#F06D6D"; g.fillText("FVG", xs + 3, Y(to) + 10); });
+  if (S.ind.bb) { const B = bbArr(S.candles).slice(-view.length); [[0, "#6c6e75"], [1, "#6c6e75"], [2, "#6c6e75"]].forEach(([k, col]) => { g.strokeStyle = col; g.lineWidth = 1; g.setLineDash(k === 1 ? [3, 3] : []); g.beginPath(); let st = false; B.forEach((b, i) => { if (!b) return; st ? g.lineTo(X(i), Y(b[k])) : g.moveTo(X(i), Y(b[k])); st = true; }); g.stroke(); g.setLineDash([]); }); g.fillStyle = "#9C9EA6"; g.fillText("BB 20,2", 10 + EMAS.length * 70, 16); }
   const tag = (v, col, bg, txt, dash) => { const y = Y(v); g.strokeStyle = col; g.setLineDash(dash || []); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]);
     const t = txt + " " + v.toFixed(d), tw = g.measureText(t).width + 10; g.fillStyle = bg; g.fillRect(w - PAD - tw - 4, y - 9, tw, 18); g.fillStyle = col; g.textAlign = "left"; g.fillText(t, w - PAD - tw + 1, y); };
   if (P) {
@@ -288,11 +313,24 @@ function drawChart() {
     tag(P.sl, "#F06D6D", "#2a1414", (P.sl !== P.sl0 ? "SL · trailed" : "SL") + " ⇅", [5, 4]);
     if (P.sl !== P.sl0) { const y = Y(P.sl0); g.strokeStyle = "#5a3333"; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(w - PAD, y); g.stroke(); g.setLineDash([]); g.fillStyle = "#8a6a6a"; g.fillText("first stop " + P.sl0.toFixed(d), 8, y - 8); }
   }
+  let top = hm;
+  const pane = (title, draw) => { g.fillStyle = "#0b0b0d"; g.fillRect(0, top, w, PH); g.strokeStyle = "#1d1d22"; g.beginPath(); g.moveTo(0, top + .5); g.lineTo(w, top + .5); g.stroke(); g.fillStyle = "#9C9EA6"; g.textAlign = "left"; g.fillText(title, 10, top + 12); draw(top + 6, PH - 12); top += PH; };
+  if (S.ind.rsi) { const R = rsiArr(S.candles).slice(-view.length); pane("RSI 14", (t0, ph) => { const y = (v) => t0 + (1 - v / 100) * ph; [30, 70].forEach((lv) => { g.strokeStyle = "#2b2b30"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(0, y(lv)); g.lineTo(w - PAD, y(lv)); g.stroke(); g.setLineDash([]); g.fillStyle = "#6c6e75"; g.fillText(lv, w - PAD + 6, y(lv)); }); g.strokeStyle = "#5AA9E6"; g.beginPath(); let st = false; R.forEach((v, i) => { if (v == null) return; st ? g.lineTo(X(i), y(v)) : g.moveTo(X(i), y(v)); st = true; }); g.stroke(); const lv = R[R.length - 1]; if (lv != null) { g.fillStyle = "#5AA9E6"; g.fillText(lv.toFixed(1), w - PAD + 6, y(lv)); } }); }
+  if (S.ind.macd) { const M = macdArr(S.candles).slice(-view.length), mx = Math.max(1e-12, ...M.map((m) => Math.abs(m[2])), ...M.map((m) => Math.abs(m[0]))); pane("MACD 12,26,9", (t0, ph) => { const y = (v) => t0 + ph / 2 - (v / mx) * (ph / 2); g.strokeStyle = "#2b2b30"; g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w - PAD, y(0)); g.stroke(); M.forEach((m, i) => { g.fillStyle = m[2] >= 0 ? "rgba(61,196,143,.7)" : "rgba(240,109,109,.7)"; g.fillRect(X(i) - 2, Math.min(y(0), y(m[2])), 4, Math.max(1, Math.abs(y(m[2]) - y(0)))); }); [[0, "#F58A14"], [1, "#B48CF2"]].forEach(([k, col]) => { g.strokeStyle = col; g.beginPath(); M.forEach((m, i) => (i ? g.lineTo(X(i), y(m[k])) : g.moveTo(X(i), y(m[k])))); g.stroke(); }); }); }
+  S.geo.x0 = x0; S.geo.slot = slot; S.geo.n = view.length; S.geo.view = view;
   const last = view[view.length - 1][4], yl = Y(last);
   g.strokeStyle = "#F58A14"; g.beginPath(); g.moveTo(0, yl); g.lineTo(w - PAD, yl); g.stroke();
   g.fillStyle = "#F58A14"; g.fillRect(w - PAD, yl - 10, PAD - 2, 20); g.fillStyle = "#16181B"; g.font = "600 12px 'JetBrains Mono',monospace"; g.fillText(last.toFixed(d), w - PAD + 5, yl);
+  const X0 = S.cross;
+  if (X0 && !S.drag && X0.x < w - PAD) {
+    const k = Math.floor((X0.x - x0) / slot), c = view[k];
+    g.strokeStyle = "#6c6e75"; g.setLineDash([2, 3]); g.beginPath(); g.moveTo(X0.x, 0); g.lineTo(X0.x, h); if (X0.y < hm) { g.moveTo(0, X0.y); g.lineTo(w - PAD, X0.y); } g.stroke(); g.setLineDash([]);
+    if (X0.y < hm) { const pv = lo + (1 - (X0.y - 8) / (hm - 20)) * (hi - lo); g.fillStyle = "#26262b"; g.fillRect(w - PAD, X0.y - 9, PAD - 2, 18); g.fillStyle = "#EDEDEE"; g.font = "11px 'JetBrains Mono',monospace"; g.textAlign = "left"; g.fillText(pv.toFixed(d), w - PAD + 5, X0.y); }
+    if (c) { const t = new Date(c[0] * 1000), txt = `${t.toLocaleDateString([], { month: "short", day: "numeric" })} ${t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}  O ${c[1].toFixed(d)}  H ${c[2].toFixed(d)}  L ${c[3].toFixed(d)}  C ${c[4].toFixed(d)}`; g.font = "11px 'JetBrains Mono',monospace"; const tw = g.measureText(txt).width + 14; g.fillStyle = "rgba(14,14,17,.92)"; g.fillRect(8, hm - 28, tw, 20); g.fillStyle = c[4] >= c[1] ? "#3DC48F" : "#F06D6D"; g.textAlign = "left"; g.fillText(txt, 14, hm - 18); }
+  }
 }
 window.addEventListener("resize", queueDraw);
+document.addEventListener("pointerout", (e) => { if (e.target && e.target.id === "cv" && S.cross) { S.cross = null; queueDraw(); } });
 /* drag the stop or target line on the chart to move it; on release the new level is sent to the broker */
 const gy = (v) => 8 + (1 - (v - S.geo.lo) / (S.geo.hi - S.geo.lo)) * (S.geo.h - 20);
 const gp = (y) => Math.min(S.geo.hi, Math.max(S.geo.lo, S.geo.lo + (1 - (y - 8) / (S.geo.h - 20)) * (S.geo.hi - S.geo.lo)));
@@ -305,7 +343,7 @@ document.addEventListener("pointerdown", (e) => {
 });
 document.addEventListener("pointermove", (e) => {
   if (!e.target || e.target.id !== "cv") return;
-  if (!S.drag) { e.target.style.cursor = hitLine(e) ? "ns-resize" : ""; return; }
+  if (!S.drag) { const r = e.target.getBoundingClientRect(); S.cross = { x: e.clientX - r.left, y: e.clientY - r.top }; e.target.style.cursor = hitLine(e) ? "ns-resize" : "crosshair"; queueDraw(); return; }
   if (Math.abs(e.clientY - S.drag.y0) > 3) S.drag.moved = true;
   S.drag.v = gp(e.clientY - e.target.getBoundingClientRect().top); queueDraw();
 });
@@ -453,7 +491,8 @@ function updateLivePos() {
     const sym = (S.posd.open.find((p) => p.venue + ":" + p.ticket === row.dataset.k) || {}).symbol || S.sym;
     row.querySelector(".lv b").textContent = pxs(L.live, sym);
     const pl = row.querySelector(".pl"); pl.className = "mono r pl " + (L.floating < 0 ? "bad" : "ok"); pl.firstChild.textContent = money(L.floating);
-    const pr = row.querySelector(".pr"); pr.textContent = (L.r >= 0 ? "+" : "") + L.r.toFixed(2) + "R"; pr.className = "mono r pr " + (L.r < 0 ? "bad" : "ok");
+    const pr = row.querySelector(".pr"); const pp = ((L.live - (+row.dataset.e)) * (row.dataset.side === "BUY" ? 1 : -1)) / Math.pow(10, -(dig(sym) - 1));
+    pr.textContent = (L.r >= 0 ? "+" : "") + L.r.toFixed(2) + "R · " + (pp >= 0 ? "+" : "") + pp.toFixed(1) + " pips"; pr.className = "mono r pr " + (L.r < 0 ? "bad" : "ok");
     const e = +row.dataset.e, sl = +row.dataset.sl, tp = +row.dataset.tp, a = Math.min(sl, tp), b = Math.max(sl, tp), pc = (v) => Math.min(100, Math.max(0, ((v - a) / (b - a)) * 100));
     const pe = pc(e), pn = pc(L.live), f = row.querySelector(".pf"), n = row.querySelector(".pn");
     f.style.left = Math.min(pe, pn) + "%"; f.style.width = Math.abs(pn - pe) + "%"; f.style.background = (row.dataset.side === "BUY" ? L.live >= e : L.live <= e) ? "var(--buy)" : "var(--sell)"; n.style.left = "calc(" + pn + "% - 1px)";
@@ -719,6 +758,14 @@ async function strategiesPage() {
       <div class="lab" style="margin-top:10px">PROOF CHECKLIST</div>
       ${ck(sel.days >= need, `History covers ${need}+ days`, sel.days + " d")}${ck(t.n >= R.min_test, `Unseen trades (need ${R.min_test})`, t.n)}${ck(t.exp >= R.min_exp, `Average per trade (need ${R.min_exp}R)`, signed(t.exp, 2) + "R")}
       ${ck(t.pf >= R.min_pf, `Profit factor (need ${R.min_pf})`, num(t.pf, 2))}${ck((t.t || 0) >= mt, `Luck score t (need ${mt})`, num(t.t, 2))}${ck(sel.share_positive_test >= R.min_robust, `Neighbouring settings also earn (need ${Math.round(R.min_robust * 100)}%)`, Math.round(sel.share_positive_test * 100) + "%")}` : '<p class="mute">Nothing earned on the first 60% of the data, so there is nothing to prove.</p>'}</section>`;
+    const rp = sel.report;
+    if (b && rp && rp.curve) {
+      const cv = [0].concat(rp.curve), lo = Math.min(...cv), hi = Math.max(...cv), rg = hi - lo || 1, W = 320, H = 110, pt = cv.map((v, i) => `${(i / (cv.length - 1)) * W},${H - 6 - ((v - lo) / rg) * (H - 12)}`).join(" "), z = H - 6 - ((0 - lo) / rg) * (H - 12);
+      side += `<section class="card"><div class="lh"><b>Unseen-trade record</b></div>
+        <div class="tstat"><div><b class="mono ${rp.net_r >= 0 ? "ok" : "bad"}">${signed(rp.net_r, 1)}R</b><i>net, ≈ ${signed(rp.net_r * (st.risk.risk_per_trade_pct || 0.5), 1)}% of equity</i></div><div><b class="mono bad">-${num(rp.max_dd_r, 1)}R</b><i>max drawdown</i></div><div><b class="mono">${num(rp.sharpe, 2)}</b><i>Sharpe (annualised)</i></div></div>
+        <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Equity curve of the unseen trades in R"><line x1="0" x2="${W}" y1="${z}" y2="${z}" stroke="#4A4A52" stroke-dasharray="4 4"/><polyline points="${pt}" fill="none" stroke="${rp.net_r >= 0 ? "#3DC48F" : "#F06D6D"}" stroke-width="1.8"/></svg>
+        <details style="margin-top:8px"><summary class="mute" style="cursor:pointer;font-size:12px">Last ${rp.trades.length} trades</summary><div class="tlog">${rp.trades.slice().reverse().map(([t, dd, x]) => `<div class="mono"><span class="mute">${new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric" })} ${new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span class="${dd > 0 ? "ok" : "bad"}">${dd > 0 ? "BUY" : "SELL"}</span><span class="${x >= 0 ? "ok" : "bad"}">${signed(x, 2)}R</span></div>`).join("")}</div></details></section>`;
+    }
     if (b) side += `<section class="card"><div class="lh"><b>Win-chance range</b></div><div class="mute" style="font-size:11px;margin-bottom:8px">From ${t.n} unseen trades. A range, not one number.</div>${rangeBar(t, b.rr)}</section>`;
   }
   h += `<div class="lside">${side}</div></div>`;

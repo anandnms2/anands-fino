@@ -393,3 +393,16 @@ button.chip.chipbtn{background:transparent;cursor:pointer;font-family:inherit}bu
   .btn { min-height: 44px; } .btn.sm { min-height: 38px; }
 }
 @media (max-width: 760px) { #bar { position: static; } .kpi { flex: 1 1 30%; min-width: 0; padding: 8px 12px; } .kpi > i { display: none; } .kpi.guard { flex-basis: 100%; } .kpi > b { font-size: 16px; } }
+
+/* terminal scrolls: the page moves, the side panels scroll inside themselves */
+#app.full .term { grid-template-rows: auto auto; height: auto; min-height: 0; }
+#app.full .term > .wl, #app.full .term > .side { height: 0; min-height: 100%; overflow-y: auto; }
+#app.full .term > .chartc { min-height: 0; }
+#app.full .cv { flex: none; height: clamp(340px, 52vh, 560px); min-height: 0; }
+#app.full .bottom { height: auto; max-height: none; min-height: 150px; overflow: visible; }
+@media (max-width: 1100px) { #app.full .term > .wl, #app.full .term > .side { height: auto; min-height: 0; overflow: visible; } #app.full .term > .wl { max-height: 320px; overflow-y: auto; } }
+.inds { margin-left: 0 !important; } .chead .tfs:last-child { margin-left: auto; }
+.halt.flat { background: #3a1514; border-color: #7a2926; margin-left: 4px; }
+.tlog > div { display: grid; grid-template-columns: 1fr 50px 60px; gap: 8px; padding: 3px 0; font-size: 12px; border-top: 1px solid #1d1d22; } .tlog { max-height: 220px; overflow-y: auto; }
+#bar { position: static; }
+.prow .pr { white-space: nowrap; font-size: 12px; }
