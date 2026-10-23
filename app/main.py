@@ -120,7 +120,10 @@ async def guard(request: Request, call_next):
     # state-changing calls must carry a header a foreign site cannot add (blocks cross-site form posts)
     if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("x-requested-with") != "fino":
         return JSONResponse({"error": "missing X-Requested-With header"}, status_code=403)
-    return await call_next(request)
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"  # always pick up a new UI after a deploy
+    return resp
 
 
 # ---------------------------------------------------------------- serializers
