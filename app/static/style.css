@@ -413,3 +413,8 @@ table.mx td { padding: 8px 12px; } table.mx th { padding: 8px 12px; }
 .mxc2 { display: inline-block; min-width: 46px; padding: 6px 8px; border-radius: 6px; font: 12px var(--font-mono); color: var(--fg); }
 .mxt { display: inline-flex; gap: 6px; } .mxt .bs { padding: 5px 12px; }
 table.mx tbody tr:hover { background: #17171a; }
+
+.mxg { display: grid; grid-template-columns: 1.1fr 1fr 1.2fr; gap: 1px; background: var(--line); } .mxg > div { background: var(--panel); padding-bottom: 12px; }
+.mxpw { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 12px 12px !important; } .mxp { background: #0e0e11; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; } .mxp .row { padding: 4px 0; border-top: 0; }
+table.mx tr.sel { background: #1c1c20; }
+@media (max-width: 1000px) { .mxg { grid-template-columns: 1fr; } .mxpw { grid-template-columns: 1fr; } }

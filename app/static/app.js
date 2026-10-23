@@ -721,7 +721,8 @@ async function specs() {
 
 
 /* ------------------------------------------------------------ signal matrix */
-let MX = { sort: "edge", filter: "all" };
+let MX = { sort: "edge", filter: "all", sel: "" };
+window.mxSel = (sym) => { MX.sel = MX.sel === sym ? "" : sym; render(); };
 const FACT_LBL = { trend: "Trend", momentum: "Momentum", structure: "Structure", macro: "Macro", sentiment: "News", positioning: "COT", calendar: "Events", volatility: "Volatility", technical: "Technical", news: "News", cot: "COT" };
 window.mxSet = (k, v) => { MX[k] = v; render(); };
 window.mxTrade = (sym, side) => { S.sym = sym; localStorage.setItem("fs", sym); S.candleKey = ""; openTicket(side); };
@@ -736,11 +737,12 @@ async function matrixPage() {
   const seg = (k, opts) => `<span class="seg" style="padding:0">${opts.map(([v, l]) => `<button aria-pressed="${MX[k] === v}" onclick="mxSet('${k}','${v}')">${l}</button>`).join("")}</span>`;
   let h = pageHead("Signal Matrix", `Every symbol against every factor, from the latest analysis. Green leans buy, red leans sell. Needs ±${th} and ${d.agree_pct || 0}% of factors agreeing.`,
     seg("filter", [["all", "All"], ["signal", "Signals only"], ["proven", "Proven only"]]) + seg("sort", [["edge", "By edge"], ["name", "A–Z"]]));
+  h += await mxDetail(d);
   h += `<section class="card mxc"><div class="tw"><table class="mx"><thead><tr><th>Symbol</th><th>Price</th><th>Verdict</th><th class="r">Score</th><th>Agree</th>${keys.map((k) => `<th class="c">${esc(FACT_LBL[k] || k)}</th>`).join("")}<th>Proof</th><th>Status</th><th class="r">Trade</th></tr></thead><tbody>`;
   for (const r of rows) {
     const px = ((S.px[S.venue] || {})[r.symbol]) || null, sc = r.score, strong = sc != null && Math.abs(sc) >= th;
     const why = r.proven ? `${esc(r.proven.strategy)} ${tfName(r.proven.tf)}` : "";
-    h += `<tr><td><a href="#/" onclick="pickSym('${r.symbol}');return true"><b>${esc(r.symbol)}</b></a>${r.timeframe ? ` <i class="mute" style="font-size:10px;font-style:normal">${esc(r.timeframe)}</i>` : ""}</td>
+    h += `<tr class="${MX.sel === r.symbol ? "sel" : ""}" style="cursor:pointer" onclick="if(!event.target.closest('button,a'))mxSel('${r.symbol}')"><td><a href="#/" onclick="pickSym('${r.symbol}');return true"><b>${esc(r.symbol)}</b></a>${r.timeframe ? ` <i class="mute" style="font-size:10px;font-style:normal">${esc(r.timeframe)}</i>` : ""}</td>
         <td class="mono">${px ? pxs(px[0], r.symbol) : "–"}</td><td>${biasPill(strong ? r.bias : "NONE")}</td>
         <td class="mono r ${sc == null ? "mute" : sc > 0 ? "ok" : sc < 0 ? "bad" : "mute"}"><b>${sc == null ? "–" : signed(sc, 0)}</b></td><td class="mono mute">${r.available ? r.agree + "/" + r.available : "–"}</td>
         ${keys.map((k) => { const f = (r.factors || {})[k], v = f ? f.score : null; return `<td class="c"><span class="mxc2" style="background:${heat(v)}" title="${esc(f ? f.reading : "no data")}">${v == null ? "–" : signed(v, 0)}</span></td>`; }).join("")}
@@ -750,6 +752,32 @@ async function matrixPage() {
   }
   h += `</tbody></table></div></section><div class="note" style="margin:0">A manual trade skips the score and Claude but not the halt switches, the Live lock or the daily loss limit. <b>PROVEN</b> means the setup earned on data it never saw in the backtest; <b>UNPROVEN</b> has no such evidence, so size it small. Hover a cell for the reading behind it. Prices are live from ${esc(VLABEL[S.venue])}.</div>`;
   $app.innerHTML = h;
+}
+
+async function mxDetail(d) {
+  if (!MX.sel) return `<div class="note" style="margin:0">Click a row for its indicator readings and a ready trade plan (entry, stop, two targets, lots and the money at risk).</div>`;
+  const sym = MX.sel, row = d.rows.find((r) => r.symbol === sym) || {};
+  const get = (path) => api(path).catch((e) => ({ error: e.message }));
+  const [an, tb, ts] = await Promise.all([get(`/api/analysis?symbol=${sym}&venue=${S.venue}`), get(`/api/trade/ticket?venue=${S.venue}&symbol=${sym}&side=BUY`), get(`/api/trade/ticket?venue=${S.venue}&symbol=${sym}&side=SELL`)]);
+  const p = (v) => pxs(v, sym), rd = (a, b) => `<div class="row sm"><span>${a}</span>${b}</div>`, tag = (t, c) => `<span class="mono ${c || ""}">${t}</span>`;
+  let ind = "";
+  if (an.error) ind = `<div class="pad mute">${esc(an.error)}</div>`;
+  else {
+    const i = an.ind, up = (a, b) => (a > b ? "ok" : "bad");
+    ind = rd("Close vs EMA 20", tag(p(i.ema20) + (i.close > i.ema20 ? " ▲ above" : " ▼ below"), up(i.close, i.ema20))) + rd("Close vs EMA 50", tag(p(i.ema50) + (i.close > i.ema50 ? " ▲ above" : " ▼ below"), up(i.close, i.ema50))) + rd("Close vs EMA 200", tag(p(i.ema200) + (i.close > i.ema200 ? " ▲ above" : " ▼ below"), up(i.close, i.ema200)))
+      + rd("Higher timeframe", tag(esc(i.htf || "n/a"), i.htf ? (/up/.test(i.htf) ? "ok" : "bad") : "mute")) + rd("RSI 14", tag(i.rsi.toFixed(1) + (i.rsi > 70 ? " overbought" : i.rsi < 30 ? " oversold" : " neutral"), i.rsi > 70 ? "bad" : i.rsi < 30 ? "ok" : "")) + rd("MACD histogram", tag((i.macd_hist >= 0 ? "+" : "") + i.macd_hist + (i.macd_hist > i.macd_hist_prev ? " rising" : " falling"), i.macd_hist >= 0 ? "ok" : "bad"))
+      + rd("ATR 14", tag(p(i.atr))) + rd("Candle pattern", tag(esc(i.pattern || "none"), i.pattern ? (/bull/.test(i.pattern) ? "ok" : "bad") : "mute")) + rd("Swing highs", tag((i.swing_highs || []).slice(-2).map(p).join(" · ") || "–")) + rd("Swing lows", tag((i.swing_lows || []).slice(-2).map(p).join(" · ") || "–"));
+  }
+  const plan = (t, side) => {
+    if (t.error) return `<div class="mxp"><b class="${side === "BUY" ? "ok" : "bad"}">${side}</b><span class="mute" style="font-size:12px">${esc(t.error)}</span></div>`;
+    const stop = Math.abs(t.entry - t.sl), risk = t.lots * stop * t.pv, rr = stop ? Math.abs(t.tp - t.entry) / stop : 0, half = side === "BUY" ? t.entry + stop : t.entry - stop;
+    return `<div class="mxp"><div style="display:flex;align-items:baseline;gap:10px"><b class="big2 ${side === "BUY" ? "ok" : "bad"}">${side}</b><span class="mono mute">${t.lots} lots</span></div>
+      ${rd("Entry", tag(p(t.entry)))}${rd("Stop", tag(p(t.sl), "bad"))}${rd("Target 1 (+1R)", tag(p(half), "ok"))}${rd("Target 2", tag(p(t.tp) + " (" + rr.toFixed(1) + "R)", "ok"))}${rd("Risk", tag(money(risk) + " · " + num(t.balance ? (risk / t.balance) * 100 : 0, 2) + "%"))}
+      <button class="bs ${side === "BUY" ? "buy" : "sell"}" style="margin-top:8px;width:100%;padding:10px" onclick="mxTrade('${sym}','${side}')">Open ${side} ticket</button></div>`;
+  };
+  const sc = row.score, factors = Object.entries(row.factors || {});
+  return `<section class="card mxd"><div class="hd"><h2>${esc(sym)} · indicator and signal matrix</h2><span>${biasPill(row.score != null && Math.abs(row.score) >= (d.threshold || 20) ? row.bias : "NONE")} <b class="mono ${sc > 0 ? "ok" : sc < 0 ? "bad" : "mute"}">${sc == null ? "" : signed(sc, 0)}</b> ${row.proven ? '<span class="sb ok" style="margin:0">PROVEN · ' + esc(row.proven.strategy) + " " + tfName(row.proven.tf) + "</span>" : '<span class="sb un" style="margin:0">UNPROVEN</span>'}</span></div>
+    <div class="mxg"><div>${ind}</div><div class="pad">${factors.map(([k, f]) => `<div class="frow"><span style="text-transform:capitalize">${esc(FACT_LBL[k] || k)}</span>${f.score == null ? '<span class="mute" style="font-size:12px">n/a</span>' : scoreBar(f.score)}<span class="mono ${f.score > 0 ? "ok" : f.score < 0 ? "bad" : "mute"}">${f.score == null ? "–" : signed(f.score, 0)}</span></div>`).join("") || '<span class="mute">No factor data yet.</span>'}<div class="mute" style="font-size:11px;margin-top:8px">Target 1 is a suggestion for taking half off by hand; the broker order carries Target 2 only.</div></div><div class="mxpw">${plan(tb, "BUY")}${plan(ts, "SELL")}</div></div></section>`;
 }
 
 /* ------------------------------------------------------------ strategy lab */
