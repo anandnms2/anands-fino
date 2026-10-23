@@ -179,6 +179,23 @@ def api_latest():
     return out
 
 
+@app.get("/api/matrix")
+def api_matrix():
+    """Signal matrix: for every symbol the latest factor scores, the combined score and verdict, the proven setup (if any) and the live price."""
+    from .db import latest_signals_per_symbol
+
+    cfg, st = get_settings(), kv_get("strategies") or {}
+    rows = []
+    for s in latest_signals_per_symbol(cfg.symbol_list):
+        row = sig_row(s)
+        row["factors"] = {k: {"score": f.get("score"), "reading": f.get("reading", "")} for k, f in (s.factors or {}).items()}
+        row["proven"] = st.get(s.symbol)
+        rows.append(row)
+    seen = {r["symbol"] for r in rows}
+    rows += [{"symbol": x, "factors": {}, "score": None, "bias": "NONE", "proven": st.get(x)} for x in cfg.symbol_list if x not in seen]
+    return {"rows": rows, "threshold": cfg.score_threshold, "agree_pct": cfg.min_agree_pct, "proven_only": engine.proven_only()}
+
+
 @app.get("/api/signals")
 def api_signals(limit: int = 50, symbol: str = ""):
     with session() as s:

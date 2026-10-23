@@ -57,7 +57,7 @@ const S = { an: {}, venue: (["demo", "live"].includes(localStorage.getItem("fv")
   ind: (() => { try { return Object.assign({ ema: true, bb: false, fvg: false, rsi: false, macd: false }, JSON.parse(localStorage.getItem("fi") || "{}")); } catch (e) { return { ema: true, bb: false, fvg: false, rsi: false, macd: false }; } })(), cross: null, st: null, latest: [], posd: { open: [], closed: [] }, appr: [], actv: [], det: null, detId: 0, candles: [], candleKey: "", mounted: false, drawQ: false };
 const dig = (s) => (s === "XAUUSD" ? 2 : s === "XAGUSD" ? 3 : /JPY$/.test(s) ? 3 : 5);
 const pxs = (v, s) => (v == null ? "–" : Number(v).toFixed(dig(s)));
-const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/strategies" ? "strategies" : h === "#/settings" ? "settings" : "terminal"; };
+const pageName = () => { const h = location.hash; return h.startsWith("#/signal") ? "signal" : h === "#/reports" ? "reports" : h === "#/specs" ? "specs" : h === "#/strategies" ? "strategies" : h === "#/matrix" ? "matrix" : h === "#/settings" ? "settings" : "terminal"; };
 const $ = (id) => document.getElementById(id);
 
 function startStream() {
@@ -113,7 +113,7 @@ const gr = (label, used, cap, text) => {
 function renderBar() {
   const st = S.st; if (!st) return;
   const V = st.venues, v = V[S.venue] || {}, a = v.account, r = st.risk, pg = pageName();
-  const nav = [["terminal", "#/", "Terminal"], ["strategies", "#/strategies", "Strategy Lab"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
+  const nav = [["terminal", "#/", "Terminal"], ["matrix", "#/matrix", "Signal Matrix"], ["strategies", "#/strategies", "Strategy Lab"], ["reports", "#/reports", "Reports"], ["specs", "#/specs", "Contracts"], ["settings", "#/settings", "Settings"]];
   const dpl = a ? a.day_pnl : null, dcap = r.daily_loss_cap_pct, lossUsed = a ? Math.max(0, -a.day_pnl_pct) : 0;
   const kpi = (label, val, sub, id, cls) => `<div class="kpi"><span>${label}</span><b class="mono ${cls || ""}" ${id ? `id="${id}"` : ""}>${val}</b><i>${sub}</i></div>`;
   $bar.innerHTML = `<div class="bar-in"><div class="bar-r1"><a class="brand" href="#/"><img src="/static/logo.png" alt=""><div><b>Anands Fino</b><span>FOREX &amp; METALS · AI + RULES</span></div></a>
@@ -720,6 +720,38 @@ async function specs() {
 }
 
 
+/* ------------------------------------------------------------ signal matrix */
+let MX = { sort: "edge", filter: "all" };
+const FACT_LBL = { trend: "Trend", momentum: "Momentum", structure: "Structure", macro: "Macro", sentiment: "News", positioning: "COT", calendar: "Events", volatility: "Volatility", technical: "Technical", news: "News", cot: "COT" };
+window.mxSet = (k, v) => { MX[k] = v; render(); };
+window.mxTrade = (sym, side) => { S.sym = sym; localStorage.setItem("fs", sym); S.candleKey = ""; openTicket(side); };
+async function matrixPage() {
+  const d = await api("/api/matrix"), st = S.st, th = d.threshold || 20;
+  let rows = d.rows.slice();
+  const keys = []; rows.forEach((r) => Object.keys(r.factors || {}).forEach((k) => { if (!keys.includes(k)) keys.push(k); }));
+  const sa = (r) => Math.abs(r.score || 0);
+  rows.sort((a, b) => MX.sort === "name" ? a.symbol.localeCompare(b.symbol) : (b.proven ? 1 : 0) - (a.proven ? 1 : 0) || sa(b) - sa(a));
+  if (MX.filter === "proven") rows = rows.filter((r) => r.proven); else if (MX.filter === "signal") rows = rows.filter((r) => sa(r) >= th);
+  const heat = (v) => v == null ? "#1c1c20" : Math.abs(v) < 8 ? "#26262b" : v > 0 ? `rgba(42,143,102,${0.3 + Math.min(1, v / 80) * 0.7})` : `rgba(168,67,63,${0.3 + Math.min(1, -v / 80) * 0.7})`;
+  const seg = (k, opts) => `<span class="seg" style="padding:0">${opts.map(([v, l]) => `<button aria-pressed="${MX[k] === v}" onclick="mxSet('${k}','${v}')">${l}</button>`).join("")}</span>`;
+  let h = pageHead("Signal Matrix", `Every symbol against every factor, from the latest analysis. Green leans buy, red leans sell. Needs ±${th} and ${d.agree_pct || 0}% of factors agreeing.`,
+    seg("filter", [["all", "All"], ["signal", "Signals only"], ["proven", "Proven only"]]) + seg("sort", [["edge", "By edge"], ["name", "A–Z"]]));
+  h += `<section class="card mxc"><div class="tw"><table class="mx"><thead><tr><th>Symbol</th><th>Price</th><th>Verdict</th><th class="r">Score</th><th>Agree</th>${keys.map((k) => `<th class="c">${esc(FACT_LBL[k] || k)}</th>`).join("")}<th>Proof</th><th>Status</th><th class="r">Trade</th></tr></thead><tbody>`;
+  for (const r of rows) {
+    const px = ((S.px[S.venue] || {})[r.symbol]) || null, sc = r.score, strong = sc != null && Math.abs(sc) >= th;
+    const why = r.proven ? `${esc(r.proven.strategy)} ${tfName(r.proven.tf)}` : "";
+    h += `<tr><td><a href="#/" onclick="pickSym('${r.symbol}');return true"><b>${esc(r.symbol)}</b></a>${r.timeframe ? ` <i class="mute" style="font-size:10px;font-style:normal">${esc(r.timeframe)}</i>` : ""}</td>
+        <td class="mono">${px ? pxs(px[0], r.symbol) : "–"}</td><td>${biasPill(strong ? r.bias : "NONE")}</td>
+        <td class="mono r ${sc == null ? "mute" : sc > 0 ? "ok" : sc < 0 ? "bad" : "mute"}"><b>${sc == null ? "–" : signed(sc, 0)}</b></td><td class="mono mute">${r.available ? r.agree + "/" + r.available : "–"}</td>
+        ${keys.map((k) => { const f = (r.factors || {})[k], v = f ? f.score : null; return `<td class="c"><span class="mxc2" style="background:${heat(v)}" title="${esc(f ? f.reading : "no data")}">${v == null ? "–" : signed(v, 0)}</span></td>`; }).join("")}
+        <td>${r.proven ? `<span class="sb ok" style="margin:0" title="Unseen: ${r.proven.test.n} trades, ${num(r.proven.test.exp, 2)}R each, PF ${num(r.proven.test.pf, 2)}">PROVEN · ${why}</span>` : `<span class="sb un" style="margin:0">UNPROVEN</span>`}</td>
+        <td>${r.status ? stPill(r.status) : '<span class="mute">–</span>'}</td>
+        <td class="r"><span class="mxt"><button class="bs buy" onclick="mxTrade('${r.symbol}','BUY')">BUY</button><button class="bs sell" onclick="mxTrade('${r.symbol}','SELL')">SELL</button></span></td></tr>`;
+  }
+  h += `</tbody></table></div></section><div class="note" style="margin:0">A manual trade skips the score and Claude but not the halt switches, the Live lock or the daily loss limit. <b>PROVEN</b> means the setup earned on data it never saw in the backtest; <b>UNPROVEN</b> has no such evidence, so size it small. Hover a cell for the reading behind it. Prices are live from ${esc(VLABEL[S.venue])}.</div>`;
+  $app.innerHTML = h;
+}
+
 /* ------------------------------------------------------------ strategy lab */
 let btTimer = null, LAB = null;
 window.labPick = (sym, tf) => { LAB = [sym, tf]; render(); };
@@ -799,6 +831,7 @@ async function render() {
     if (pg === "signal") { await ensureSt(); await detail(location.hash.match(/(\d+)/)[1]); }
     else if (pg === "reports") { await ensureSt(); await reports(); }
     else if (pg === "specs") { await ensureSt(); await specs(); }
+    else if (pg === "matrix") { await ensureSt(); await matrixPage(); }
     else if (pg === "strategies") { await ensureSt(); await strategiesPage(); }
     else if (pg === "settings") await settings();
     else await terminal();

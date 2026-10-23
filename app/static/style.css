@@ -406,3 +406,10 @@ button.chip.chipbtn{background:transparent;cursor:pointer;font-family:inherit}bu
 .tlog > div { display: grid; grid-template-columns: 1fr 50px 60px; gap: 8px; padding: 3px 0; font-size: 12px; border-top: 1px solid #1d1d22; } .tlog { max-height: 220px; overflow-y: auto; }
 #bar { position: static; }
 .prow .pr { white-space: nowrap; font-size: 12px; }
+
+/* signal matrix */
+table.mx { min-width: 1100px; } table.mx th.c, table.mx td.c { text-align: center; }
+table.mx td { padding: 8px 12px; } table.mx th { padding: 8px 12px; }
+.mxc2 { display: inline-block; min-width: 46px; padding: 6px 8px; border-radius: 6px; font: 12px var(--font-mono); color: var(--fg); }
+.mxt { display: inline-flex; gap: 6px; } .mxt .bs { padding: 5px 12px; }
+table.mx tbody tr:hover { background: #17171a; }

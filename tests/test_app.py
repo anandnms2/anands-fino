@@ -262,3 +262,12 @@ def test_flatten_all_halts_and_closes_every_open_trade():
     assert len(r["closed"]) == 2 and not r["failed"] and engine.halted()["on"]
     with session() as s:
         assert not s.scalars(select(Position).where(Position.status == "open")).all()
+
+
+def test_signal_matrix_lists_every_symbol_with_factors_and_proof():
+    from app import main
+    from app.config import get_settings
+
+    d = TestClient(main.app).get("/api/matrix", auth=AUTH, headers=HDR).json()
+    assert {r["symbol"] for r in d["rows"]} == set(get_settings().symbol_list)
+    assert all("factors" in r and "proven" in r for r in d["rows"]) and d["threshold"] > 0
